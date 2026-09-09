@@ -2,9 +2,9 @@
 
 [![GitHub Stars](https://img.shields.io/github/stars/perber/leafwiki?style=flat-square)](https://github.com/perber/leafwiki/stargazers) [![Latest Release](https://img.shields.io/github/v/release/perber/leafwiki?style=flat-square)](https://github.com/perber/leafwiki/releases) [![Backend CI](https://github.com/perber/leafwiki/actions/workflows/backend.yml/badge.svg)](https://github.com/perber/leafwiki/actions/workflows/backend.yml) [![Frontend CI](https://github.com/perber/leafwiki/actions/workflows/frontend.yml/badge.svg)](https://github.com/perber/leafwiki/actions/workflows/frontend.yml)
 
-Self-hosted wiki. Single Go binary. SQLite + Markdown stored on disk.
+Self-hosted wiki. Go application with PostgreSQL + PGroonga persistence.
 
-For engineers and self-hosters who want structured, long-lived documentation. No Node.js, no Redis, no Postgres — just a binary and a data directory.
+For engineers and self-hosters who want structured, long-lived documentation. The Go server uses PostgreSQL + PGroonga; attachments remain in a data directory. Node.js is needed only to build the frontend.
 
 ![LeafWiki](./assets/preview.png)
 
@@ -14,10 +14,13 @@ If you've looked at Wiki.js or Outline and thought "this is too much to operate 
 → If it fits, [a star](https://github.com/perber/leafwiki) helps others find it.
 
 ```bash
-docker run -p 8080:8080 -v ~/leafwiki-data:/app/data \
-  ghcr.io/perber/leafwiki:latest \
-  --jwt-secret=yoursecret --admin-password=yourpassword --allow-insecure=true
+# From this PostgreSQL branch checkout:
+docker compose -f compose.postgres.yml up -d --wait postgres
+docker compose -f compose.postgres.yml run --build --rm database database migrate
 ```
+
+Then follow the [PostgreSQL setup guide](docs/postgresql.md) to start the server.
+Build this branch; upstream release images may still use the legacy storage model.
 
 → [All install options](#install) (Docker Compose, Linux installer, binary)
 
@@ -55,8 +58,8 @@ docker run -p 8080:8080 -v ~/leafwiki-data:/app/data \
 ## Features
 
 **Operations:**
-- Single Go binary — no external database, no runtime dependencies
-- Markdown on disk — page content is readable outside the app, backup is `cp -r` (stop the app first)
+- Single Go application binary — PostgreSQL + PGroonga and PostgreSQL 17 backup clients required
+- Markdown stored in PostgreSQL — existing Markdown syntax and editor are preserved; read-only legacy import and complete PostgreSQL backups are available (see the transfer guide).
 - Runs on Linux, macOS, Windows, Raspberry Pi (x86_64 and ARM64)
 - Reverse-proxy friendly with `--base-path`
 - Reverse-proxy authentication via trusted HTTP header (v0.10+)
@@ -126,108 +129,55 @@ LeafWiki is intentionally narrower than those systems. That focus is part of the
 
 ### Docker
 
-```bash
-docker run -p 8080:8080 \
-    -v ~/leafwiki-data:/app/data \
-    ghcr.io/perber/leafwiki:latest \
-    --jwt-secret=yoursecret \
-    --admin-password=yourpassword \
-    --allow-insecure=true
-```
-
-`--allow-insecure=true` is required for plain HTTP. Omit it when serving over HTTPS (make sure your reverse proxy forwards `X-Forwarded-Proto: https`).
-
-**Non-root:**
+Build this checkout with `docker build -t leafwiki-postgres .`. Provision PostgreSQL
+17 with PGroonga 4.0.8, set `LEAFWIKI_DATABASE_URL` to its connection URI, and run
+migrations before the server. The database must be reachable from the container:
 
 ```bash
-docker run -p 8080:8080 \
-    -u 1000:1000 \
-    -v ~/leafwiki-data:/app/data \
-    ghcr.io/perber/leafwiki:latest \
-    --jwt-secret=yoursecret \
-    --admin-password=yourpassword \
-    --allow-insecure=true
+docker run --rm -e LEAFWIKI_DATABASE_URL leafwiki-postgres database migrate
+docker run -p 8080:8080 -e LEAFWIKI_DATABASE_URL \
+  -v ~/leafwiki-data:/app/data leafwiki-postgres \
+  --jwt-secret=yoursecret --admin-password=yourpassword --allow-insecure=true
 ```
 
-The data directory must be writable by the specified user.
+`--allow-insecure=true` permits plain HTTP. For non-root containers, make the data
+directory writable by the chosen UID. Assets and PostgreSQL volumes both require
+backup; use [complete backup/restore](docs/postgresql-transfer.md).
 
 ### Docker Compose
 
-```yaml
-services:
-  leafwiki:
-    image: ghcr.io/perber/leafwiki:latest
-    container_name: leafwiki
-    user: 1000:1000
-    ports:
-      - "8080:8080"
-    environment:
-      - LEAFWIKI_JWT_SECRET=yourSecret
-      - LEAFWIKI_ADMIN_PASSWORD=yourPassword
-      - LEAFWIKI_ALLOW_INSECURE=true  # Required for plain HTTP. Omit for HTTPS (ensure `X-Forwarded-Proto: https` is forwarded).
-    volumes:
-      - ${HOME}/leafwiki-data:/app/data
-    restart: unless-stopped
-```
+[compose.postgres.yml](compose.postgres.yml) provides the pinned development
+PostgreSQL/PGroonga service, migration tool and integration tests. See the
+[setup guide](docs/postgresql.md). Its development password is not a production
+credential. The E2E runner creates its own fresh database and asset volumes.
 
 ### Linux installer
 
-```bash
-sudo /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/perber/leafwiki/main/install.sh)"
-```
-
-Installs LeafWiki as a system service. Tested on Ubuntu, Debian, and Raspbian.
-
-**Update:**
-
-```bash
-sudo /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/perber/leafwiki/main/update.sh)"
-```
-
-> Only works if you installed with the script above. Not compatible with Docker or binary installs.
-
-**Non-interactive mode:**
-
-```bash
-cp .env.example .env
-# Edit .env with your configuration
-sudo ./install.sh --non-interactive --env-file ./.env
-```
-
-> Security: in interactive mode, environment variables are written in plain text to `/etc/leafwiki/.env`. Restrict access to that file.
-
-**Deployment examples:**
-- [Install with nginx on Ubuntu](docs/install/nginx.md)
-- [Install on a Raspberry Pi](docs/install/raspberry.md)
+The upstream download/install scripts are legacy release tooling and do not
+provision this branch's PostgreSQL database. For this branch use the source-built
+binary or Docker image and configure/migrate PostgreSQL explicitly. Existing
+legacy installations should follow the [read-only import guide](docs/postgresql-transfer.md).
 
 ### Binary
 
+Install PostgreSQL 17 `pg_dump`/`pg_restore` on PATH and configure a dedicated
+PostgreSQL + PGroonga database:
+
 ```bash
-chmod +x leafwiki
+export LEAFWIKI_DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DATABASE'
+./leafwiki database migrate
 ./leafwiki --jwt-secret=yoursecret --admin-password=yourpassword --allow-insecure=true
 ```
 
-The server binds to `127.0.0.1:8080` by default. To expose it on the network:
-
-```bash
-./leafwiki --jwt-secret=yoursecret --admin-password=yourpassword --host=0.0.0.0 --allow-insecure=true
-```
-
-Default data directory is `./data`. Change with `--data-dir`.
+The default address is `127.0.0.1:8080`; `--host` and `--data-dir` retain their
+existing meanings. Migrations are explicit; startup checks the schema without
+recreating it. Import into an empty migrated target before its first server start.
 
 ### Build from source
 
-Requires Go and Node.js. `make build` compiles the UI, embeds it, and produces a self-contained `leafwiki` binary (same as release/Docker builds). Use HTTP (`http://localhost:8080/`), not HTTPS, unless you terminate TLS in front of LeafWiki.
-
-```bash
-git clone https://github.com/perber/leafwiki.git
-cd leafwiki
-git switch --detach v0.12.1   # or any tag / main
-make build
-./leafwiki --disable-auth --host=127.0.0.1 --data-dir ./data --allow-insecure=true
-```
-
-For API-only local development with Vite, use `make build-api` (or `make run`) instead — see [Dev Setup](#dev-setup).
+Use this checkout with Go and Node.js. `make build` embeds the frontend in the
+binary. Configure `LEAFWIKI_DATABASE_URL` and run `./leafwiki database migrate`
+before startup. Existing operating-mode flags below assume this database setup.
 
 ### Reset admin password
 
@@ -275,7 +225,14 @@ Authentication is completely disabled. Anyone who can reach the server can read 
 
 ## Dev Setup
 
-**Stack:** Go · React (Vite) · SQLite
+Pages, revision history, authentication, persistent user/instance settings and
+derived links/tags/properties use PostgreSQL. Application search uses PGroonga; the normal server opens no
+SQLite databases. Read-only legacy import and complete backup/restore are described in the
+[transfer guide](docs/postgresql-transfer.md). See the
+[PostgreSQL development guide](docs/postgresql.md) for the pinned PGroonga Docker
+environment, migration commands, and integration tests.
+
+**Stack:** Go · React (Vite) · PostgreSQL · PGroonga
 
 ```bash
 git clone https://github.com/perber/leafwiki.git
@@ -291,8 +248,9 @@ npm run dev
 
 **Terminal 2 — Backend:**
 ```bash
-cd cmd/leafwiki
-go run . --jwt-secret=yoursecret --allow-insecure=true --admin-password=yourpassword
+export LEAFWIKI_DATABASE_URL='postgres://leafwiki:leafwiki_dev_password@127.0.0.1:15432/leafwiki?sslmode=disable'
+go run ./cmd/leafwiki database migrate
+go run ./cmd/leafwiki --jwt-secret=yoursecret --allow-insecure=true --admin-password=yourpassword
 ```
 
 Vite starts on `http://localhost:5173`. The backend binds to `127.0.0.1` by default.
@@ -358,7 +316,7 @@ For plain HTTP: add `--allow-insecure=true` so login and CSRF cookies work.
 | `--enable-metrics`               | Enable the Prometheus `/metrics` endpoint on a separate listener        | `false`       | v0.12.0 |
 | `--metrics-host`                 | Host/IP for the metrics listener                                       | `127.0.0.1`   | v0.12.0 |
 | `--metrics-port`                 | Port for the metrics listener                                          | `9091`        | v0.12.0 |
-| `--snapshot`                     | Enable full backup snapshots (ZIP incl. the SQLite database)           | `true`        | v0.12.0 |
+| `--snapshot`                     | Enable full backup snapshots (ZIP including PostgreSQL and assets)           | `true`        | v0.12.0 |
 | `--snapshot-interval`            | Snapshot interval (e.g. `24h`, `6h`); `0` = manual-only                 | `24h`         | v0.12.0 |
 | `--snapshot-retention`           | Number of most recent snapshots to keep; `<= 0` = keep all             | `10`          | v0.12.0 |
 | `--snapshot-dir`                 | Directory to store snapshot ZIPs in                                     | `<data-dir>/snapshots` | v0.12.0 |
@@ -584,7 +542,7 @@ On GitHub, create a **fine-grained personal access token** limited to the backup
 - Prefer `https://` over `http://`: with plain `http://` the credentials and your wiki content travel unencrypted, and LeafWiki logs a warning at startup.
 - `--git-backup-ssh-known-hosts` is optional but recommended for SSH remotes. If not set, LeafWiki falls back to `~/.ssh/known_hosts`. If that file does not exist either (common in containers), SSH host key verification is **disabled** — leaving connections open to MITM attacks. Set this flag explicitly in production. It has no effect on HTTP(S) remotes, which are verified via TLS.
 - If the remote diverges (e.g. someone pushed directly to the backup branch), LeafWiki will stop auto-pushing and show a **Conflict — remote diverged** warning in the UI. Click **Force Push** in the UI to overwrite the remote with the current local backup history. Your wiki content is never lost — the local backup repo is always authoritative.
-- This backs up **content only** — the SQLite database is not included. For a full backup, use your data directory (`cp -r` with the app stopped).
+- On PostgreSQL runtimes, Full Backup snapshots contain a standard PostgreSQL dump and all required filesystem assets with a checksum manifest. Use only trusted backups. See the [transfer guide](docs/postgresql-transfer.md); copying the data directory alone is insufficient. Git backup remains a legacy filesystem feature and is unavailable on PostgreSQL.
 
 ---
 
@@ -651,6 +609,8 @@ A trailing `.md` suffix in a link target is ignored for page lookup (for example
 ## External Edits & Resync
 
 LeafWiki is intended to be the primary writer for a workspace. However, Markdown files may still be changed outside LeafWiki — for example through a text editor, Git, a script, or a bulk import.
+
+**PostgreSQL branch:** normal resync rebuilds from PostgreSQL pages, not external Markdown files. The following filesystem behavior describes the legacy adapter; workspace import is explicit via `database import-legacy`, never automatic at startup.
 
 LeafWiki does not continuously watch the filesystem for these changes. To make externally modified files visible to LeafWiki, trigger a resync in one of two ways:
 

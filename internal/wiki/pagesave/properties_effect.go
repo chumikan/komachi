@@ -47,8 +47,7 @@ func (e *PropertiesSideEffect) Apply(event PageSaveEvent) {
 }
 
 func (e *PropertiesSideEffect) setProperties(p *tree.Page, operation PageOperationType) {
-	props := properties.ExtractPropertiesFromContent(p.RawContent)
-	if err := e.svc.SetPropertiesForPage(p.ID, props); err != nil {
+	if err := e.svc.IndexPageContent(p.ID, p.RawContent); err != nil {
 		e.log.Warn("failed to set properties for page", "pageID", p.ID, "error", err)
 		e.metrics.IncPageSaveSideEffectFailure(string(operation), e.Name())
 	}

@@ -39,7 +39,16 @@ func NewMovePageUseCase(
 }
 
 // Execute moves the page and fires post-save side effects for the whole subtree.
-func (uc *MovePageUseCase) Execute(_ context.Context, in MovePageInput) (err error) {
+func (uc *MovePageUseCase) Execute(ctx context.Context, in MovePageInput) (err error) {
+	if uc.tree.UsesPostgres() {
+		return uc.orchestrator.Transact(ctx, uc.tree, func(local *tree.TreeService, o *pagesave.PageSaveOrchestrator) error {
+			copy := *uc
+			copy.tree = local
+			copy.orchestrator = o
+			return copy.Execute(ctx, in)
+		})
+	}
+
 	started := time.Now()
 	defer func() {
 		uc.metrics.ObservePageSaveWorkflow(string(pagesave.PageOperationMove), err, started)

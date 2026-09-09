@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,8 @@ import (
 )
 
 type SessionStore struct {
+	pg         *postgres.Store
+	tx         *sql.Tx
 	mu         sync.Mutex
 	storageDir string
 	filename   string
@@ -78,6 +81,9 @@ func (s *SessionStore) withDB(fn func(db *sql.DB) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.db == nil && s.pg != nil {
+		s.db = s.pg.SQLDB()
+	}
 	if s.db == nil {
 		db, err := sql.Open("sqlite", sessionDatabasePath(s.storageDir, s.filename)+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 		if err != nil {
@@ -90,7 +96,7 @@ func (s *SessionStore) withDB(fn func(db *sql.DB) error) error {
 }
 
 func (s *SessionStore) ensureSchema() error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			CREATE TABLE IF NOT EXISTS sessions (
 				id TEXT PRIMARY KEY,          -- jti
@@ -129,10 +135,10 @@ func (s *SessionStore) Close() error {
 }
 
 func (s *SessionStore) CreateSession(id, userID, tokenType string, expiresAt time.Time) error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			INSERT INTO sessions (id, user_id, token_type, created_at, expires_at, revoked_at)
-			VALUES (?, ?, ?, ?, ?, NULL);
+			VALUES ($1, $2, $3, $4, $5, NULL);
 		`, id, userID, tokenType, time.Now().Unix(), expiresAt.Unix())
 		return err
 	})
@@ -142,11 +148,11 @@ func (s *SessionStore) IsActive(id, userID, tokenType string, now time.Time) (bo
 	var expiresAt int64
 	var revokedAt sql.NullInt64
 
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		return db.QueryRow(`
 			SELECT expires_at, revoked_at
 			FROM sessions
-			WHERE id = ? AND user_id = ? AND token_type = ?;
+			WHERE id = $1 AND user_id = $2 AND token_type = $3;
 		`, id, userID, tokenType).Scan(&expiresAt, &revokedAt)
 	})
 
@@ -168,22 +174,22 @@ func (s *SessionStore) IsActive(id, userID, tokenType string, now time.Time) (bo
 }
 
 func (s *SessionStore) RevokeSession(id string) error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			UPDATE sessions
-			SET revoked_at = ?
-			WHERE id = ? AND revoked_at IS NULL;
+			SET revoked_at = $1
+			WHERE id = $2 AND revoked_at IS NULL;
 		`, time.Now().Unix(), id)
 		return err
 	})
 }
 
 func (s *SessionStore) RevokeAllSessionsForUser(userID string) error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			UPDATE sessions
-			SET revoked_at = ?
-			WHERE user_id = ? AND revoked_at IS NULL;
+			SET revoked_at = $1
+			WHERE user_id = $2 AND revoked_at IS NULL;
 		`, time.Now().Unix(), userID)
 		return err
 	})
@@ -194,11 +200,11 @@ func (s *SessionStore) RevokeAllSessionsForUser(userID string) error {
 // is revoked (same as RevokeAllSessionsForUser) — the safe fallback when the
 // caller could not identify which session to preserve.
 func (s *SessionStore) RevokeAllSessionsForUserExcept(userID, exceptID string) error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			UPDATE sessions
-			SET revoked_at = ?
-			WHERE user_id = ? AND revoked_at IS NULL AND id != ?;
+			SET revoked_at = $1
+			WHERE user_id = $2 AND revoked_at IS NULL AND id != $3;
 		`, time.Now().Unix(), userID, exceptID)
 		return err
 	})
@@ -208,7 +214,7 @@ func (s *SessionStore) RevokeAllSessionsForUserExcept(userID, exceptID string) e
 // expired, or already revoked) — used after a restore, where the previous
 // sessions.db content is no longer meaningful against a swapped-in users.db.
 func (s *SessionStore) DeleteAllSessions() error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`DELETE FROM sessions;`)
 		return err
 	})
@@ -216,11 +222,18 @@ func (s *SessionStore) DeleteAllSessions() error {
 
 func (s *SessionStore) CleanupExpiredSessions() error {
 	now := time.Now()
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			DELETE FROM sessions
-			WHERE expires_at <= ?;
+			WHERE expires_at <= $1;
 		`, now.Unix())
 		return err
 	})
+}
+
+func (s *SessionStore) withQueries(fn func(postgres.SQLQueries) error) error {
+	if s.tx != nil {
+		return fn(s.tx)
+	}
+	return s.withDB(func(db *sql.DB) error { return fn(db) })
 }

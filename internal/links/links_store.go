@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -18,6 +20,7 @@ type LinksStore struct {
 	storageDir string
 	filename   string
 	db         *sql.DB
+	pg         *postgres.Store
 }
 
 const (
@@ -27,6 +30,7 @@ const (
 )
 
 type PageLinkUpdate struct {
+	SourceRaw  *string
 	FromPageID string
 	FromTitle  string
 	ToPath     string
@@ -36,6 +40,13 @@ type PageLinkUpdate struct {
 func linksDatabasePath(storageDir string, filename string) string {
 	normalizedStorageDir := filepath.FromSlash(strings.ReplaceAll(storageDir, `\`, `/`))
 	return filepath.Join(normalizedStorageDir, filename)
+}
+
+func NewPostgresLinksStore(store *postgres.Store) (*LinksStore, error) {
+	if store == nil {
+		return nil, fmt.Errorf("PostgreSQL store is required")
+	}
+	return &LinksStore{db: store.SQLDB(), pg: store}, nil
 }
 
 func NewLinksStore(storageDir string) (*LinksStore, error) {
@@ -65,6 +76,10 @@ func NewLinksStore(storageDir string) (*LinksStore, error) {
 func (s *LinksStore) Connect() error {
 	// Database is already open and connected
 	if s.db != nil {
+		return nil
+	}
+	if s.pg != nil {
+		s.db = s.pg.SQLDB()
 		return nil
 	}
 	// Connect to the database
@@ -107,7 +122,7 @@ func (s *LinksStore) DeleteOutgoingLinks(fromPageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(`DELETE FROM links WHERE from_page_id = ?`, fromPageID)
+	_, err := s.db.Exec(`DELETE FROM links WHERE from_page_id = $1`, fromPageID)
 	return err
 }
 
@@ -121,7 +136,7 @@ func (s *LinksStore) MarkIncomingLinksBroken(toPageID string) error {
 		UPDATE links
 		SET to_page_id = NULL,
 		    broken    = 1
-		WHERE to_page_id = ?
+		WHERE to_page_id = $1
 		  AND broken = 0
 	`, toPageID)
 
@@ -138,7 +153,7 @@ func (s *LinksStore) MarkLinksBrokenForPath(toPath string) error {
 		UPDATE links
 		SET to_page_id = NULL,
 		    broken    = 1
-		WHERE to_path = ?
+		WHERE to_path = $1
 		  AND broken  = 0
 	`, toPath)
 
@@ -157,8 +172,8 @@ func (s *LinksStore) MarkLinksBrokenForPrefix(oldPrefix string) error {
 		    broken    = 1
 		WHERE broken = 0
 		  AND (
-		    to_path = ?
-		    OR to_path LIKE ? || '/%'
+		    to_path = $1
+		    OR `+s.pathLike("$2")+` || '/%'
 		  )
 	`, oldPrefix, oldPrefix)
 
@@ -166,6 +181,9 @@ func (s *LinksStore) MarkLinksBrokenForPrefix(oldPrefix string) error {
 }
 
 func (s *LinksStore) AddLinks(fromPageID string, fromTitle string, toLinks []TargetLink) error {
+	return s.addLinks(fromPageID, fromTitle, toLinks, nil, nil)
+}
+func (s *LinksStore) addLinks(fromPageID string, fromTitle string, toLinks []TargetLink, raw, path *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tx, err := s.db.Begin()
@@ -173,8 +191,19 @@ func (s *LinksStore) AddLinks(fromPageID string, fromTitle string, toLinks []Tar
 		return err
 	}
 
+	defer tx.Rollback()
+	if s.pg != nil && raw != nil {
+		matches, err := postgres.CurrentPageMatches(tx, fromPageID, *raw, path)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return nil
+		}
+	}
+
 	// Clean up existing links to avoid duplicates for the same from_page_id
-	_, err = tx.Exec(`DELETE FROM links WHERE from_page_id = ?`, fromPageID)
+	_, err = tx.Exec(`DELETE FROM links WHERE from_page_id = $1`, fromPageID)
 	if err != nil {
 		rbErr := tx.Rollback()
 		base := fmt.Errorf("failed to clear existing links for page %s", fromPageID)
@@ -185,7 +214,7 @@ func (s *LinksStore) AddLinks(fromPageID string, fromTitle string, toLinks []Tar
 		return errors.Join(base, err)
 	}
 
-	stmt, err := tx.Prepare(`INSERT OR REPLACE INTO links(from_page_id, to_page_id, to_path, from_title, broken) VALUES (?, ?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO links(from_page_id, to_page_id, to_path, from_title, broken) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (from_page_id, to_path) DO UPDATE SET to_page_id = excluded.to_page_id, from_title = excluded.from_title, broken = excluded.broken`)
 	if err != nil {
 		rbErr := tx.Rollback()
 		base := fmt.Errorf("failed to prepare insert statement for links from page %s", fromPageID)
@@ -243,7 +272,10 @@ func (s *LinksStore) ReplaceLinksAndHeal(updates []PageLinkUpdate) error {
 }
 
 func (s *LinksStore) replaceLinksAndHealTx(tx *sql.Tx, updates []PageLinkUpdate) error {
-	deleteStmt, err := tx.Prepare(`DELETE FROM links WHERE from_page_id = ?`)
+	updates = append([]PageLinkUpdate(nil), updates...)
+	sort.SliceStable(updates, func(i, j int) bool { return updates[i].FromPageID < updates[j].FromPageID })
+	accepted := make(map[string]bool, len(updates))
+	deleteStmt, err := tx.Prepare(`DELETE FROM links WHERE from_page_id = $1`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare delete statement for batched link update: %w", err)
 	}
@@ -253,7 +285,7 @@ func (s *LinksStore) replaceLinksAndHealTx(tx *sql.Tx, updates []PageLinkUpdate)
 		}
 	}()
 
-	insertStmt, err := tx.Prepare(`INSERT OR REPLACE INTO links(from_page_id, to_page_id, to_path, from_title, broken) VALUES (?, ?, ?, ?, ?)`)
+	insertStmt, err := tx.Prepare(`INSERT INTO links(from_page_id, to_page_id, to_path, from_title, broken) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (from_page_id, to_path) DO UPDATE SET to_page_id = excluded.to_page_id, from_title = excluded.from_title, broken = excluded.broken`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare insert statement for batched link update: %w", err)
 	}
@@ -265,8 +297,8 @@ func (s *LinksStore) replaceLinksAndHealTx(tx *sql.Tx, updates []PageLinkUpdate)
 
 	healStmt, err := tx.Prepare(`
 		UPDATE links
-		SET to_page_id = ?, broken = 0
-		WHERE to_path = ? AND broken = 1
+		SET to_page_id = $1, broken = 0
+		WHERE to_path = $2 AND broken = 1
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare heal statement for batched link update: %w", err)
@@ -278,6 +310,16 @@ func (s *LinksStore) replaceLinksAndHealTx(tx *sql.Tx, updates []PageLinkUpdate)
 	}()
 
 	for _, update := range updates {
+		if s.pg != nil && update.SourceRaw != nil {
+			matches, err := postgres.CurrentPageMatches(tx, update.FromPageID, *update.SourceRaw, &update.ToPath)
+			if err != nil {
+				return err
+			}
+			if !matches {
+				continue
+			}
+		}
+		accepted[update.FromPageID] = true
 		if _, err := deleteStmt.Exec(update.FromPageID); err != nil {
 			return fmt.Errorf("failed to clear existing links for page %s: %w", update.FromPageID, err)
 		}
@@ -294,6 +336,9 @@ func (s *LinksStore) replaceLinksAndHealTx(tx *sql.Tx, updates []PageLinkUpdate)
 	}
 
 	for _, update := range updates {
+		if !accepted[update.FromPageID] {
+			continue
+		}
 		if _, err := healStmt.Exec(update.FromPageID, update.ToPath); err != nil {
 			return fmt.Errorf("failed to heal links for path %s: %w", update.ToPath, err)
 		}
@@ -305,7 +350,7 @@ func (s *LinksStore) replaceLinksAndHealTx(tx *sql.Tx, updates []PageLinkUpdate)
 func (s *LinksStore) GetBacklinksForPage(pageID string) ([]Backlink, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rows, err := s.db.Query(`SELECT from_page_id, to_page_id, from_title FROM links WHERE to_page_id = ? and broken = 0`, pageID)
+	rows, err := s.db.Query(`SELECT from_page_id, to_page_id, from_title FROM links WHERE to_page_id = $1 and broken = 0`, pageID)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +388,7 @@ func (s *LinksStore) GetOutgoingLinksForPage(pageID string) ([]Outgoing, error) 
 	rows, err := s.db.Query(`
         SELECT from_page_id, to_page_id, to_path, from_title, broken
         FROM links
-        WHERE from_page_id = ?
+        WHERE from_page_id = $1
     `, pageID)
 	if err != nil {
 		return nil, err
@@ -404,7 +449,7 @@ func (s *LinksStore) GetOutgoingLinksForPages(pageIDs []string) (map[string][]Ou
 }
 
 func (s *LinksStore) appendOutgoingLinksForPageBatch(outgoingByPageID map[string][]Outgoing, pageIDs []string) error {
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(pageIDs)), ",")
+	placeholders := postgres.Placeholders(1, len(pageIDs))
 	args := make([]any, 0, len(pageIDs))
 	for _, pageID := range pageIDs {
 		args = append(args, pageID)
@@ -451,7 +496,7 @@ func (s *LinksStore) GetRefactorMatchesForPrefix(oldPrefix string) ([]RefactorLi
 	rows, err := s.db.Query(`
 		SELECT from_page_id, from_title, to_path, broken
 		FROM links
-		WHERE to_path = ? OR to_path LIKE ?
+		WHERE to_path = $1 OR `+s.pathLike("$2")+`
 	`, oldPrefix, oldPrefix+"/%")
 	if err != nil {
 		return nil, err
@@ -486,7 +531,7 @@ func (s *LinksStore) GetRefactorSourcePageIDsForPrefix(oldPrefix string) ([]stri
 	rows, err := s.db.Query(`
 		SELECT DISTINCT from_page_id
 		FROM links
-		WHERE to_path = ? OR to_path LIKE ?
+		WHERE to_path = $1 OR `+s.pathLike("$2")+`
 	`, oldPrefix, oldPrefix+"/%")
 	if err != nil {
 		return nil, err
@@ -519,7 +564,7 @@ func (s *LinksStore) GetRefactorSourcePageIDsForWikiLinkTitle(title string) ([]s
 	rows, err := s.db.Query(`
 		SELECT DISTINCT from_page_id
 		FROM links
-		WHERE LOWER(to_path) = ?
+		WHERE `+s.foldedPath()+` = $1
 	`, strings.ToLower(wikilinkSentinelPrefix+title))
 	if err != nil {
 		return nil, err
@@ -552,7 +597,7 @@ func (s *LinksStore) GetBrokenIncomingForPath(toPath string) ([]Backlink, error)
 	rows, err := s.db.Query(`
 		SELECT from_page_id, to_page_id, from_title
 		FROM links
-		WHERE to_path = ? AND broken = 1
+		WHERE to_path = $1 AND broken = 1
 		ORDER BY from_title ASC
 	`, toPath)
 	if err != nil {
@@ -592,8 +637,8 @@ func (s *LinksStore) HealLinksForPath(toPath string, pageID string) error {
 
 	_, err := s.db.Exec(`
 		UPDATE links
-		SET to_page_id = ?, broken = 0
-		WHERE to_path = ? AND broken = 1
+		SET to_page_id = $1, broken = 0
+		WHERE to_path = $2 AND broken = 1
 	`, pageID, toPath)
 
 	return err
@@ -608,8 +653,8 @@ func (s *LinksStore) HealWikiLinksForTitle(title string, pageID string) error {
 
 	_, err := s.db.Exec(`
 		UPDATE links
-		SET to_page_id = ?, broken = 0
-		WHERE LOWER(to_path) = ? AND broken = 1
+		SET to_page_id = $1, broken = 0
+		WHERE `+s.foldedPath()+` = $2 AND broken = 1
 	`, pageID, strings.ToLower(wikilinkSentinelPrefix+title))
 
 	return err
@@ -642,4 +687,17 @@ func (s *LinksStore) GetDB() *sql.DB {
 		return nil
 	}
 	return s.db
+}
+
+func (s *LinksStore) pathLike(parameter string) string {
+	if s.pg != nil {
+		return postgres.ASCIIFold("to_path") + " LIKE " + postgres.ASCIIFold(parameter)
+	}
+	return "to_path LIKE " + parameter
+}
+func (s *LinksStore) foldedPath() string {
+	if s.pg != nil {
+		return postgres.ASCIIFold("to_path")
+	}
+	return "LOWER(to_path)"
 }

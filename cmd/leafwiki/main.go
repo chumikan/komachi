@@ -34,6 +34,8 @@ import (
 	"github.com/perber/wiki/internal/publicaccess"
 	"github.com/perber/wiki/internal/restore"
 	"github.com/perber/wiki/internal/snapshot"
+	"github.com/perber/wiki/internal/storage/postgres"
+	"github.com/perber/wiki/internal/transfer"
 	"github.com/perber/wiki/internal/wiki"
 	wikibackup "github.com/perber/wiki/internal/wiki/backup"
 	wikiinstancesettings "github.com/perber/wiki/internal/wiki/instancesettings"
@@ -122,7 +124,17 @@ func main() {
 }
 
 func runResetAdminPasswordCommand(cfg *serverConfig) error {
-	user, err := tools.ResetAdminPassword(cfg.server.dataDir, cfg.auth.adminUsername, cfg.auth.adminEmail)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	database, err := postgres.Open(ctx, postgres.DefaultConfig(strings.TrimSpace(os.Getenv("LEAFWIKI_DATABASE_URL"))))
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	if err := database.CheckSchema(ctx); err != nil {
+		return err
+	}
+	user, err := tools.ResetPostgresAdminPassword(database, cfg.auth.adminUsername, cfg.auth.adminEmail)
 	if err != nil {
 		return fmt.Errorf("password reset failed: %w", err)
 	}
@@ -134,7 +146,18 @@ func runResetAdminPasswordCommand(cfg *serverConfig) error {
 
 // runServerCommand is the root action: with no subcommand given, leafwiki runs
 // the wiki server.
-func runServerCommand(_ context.Context, cmd *cli.Command, cfg *serverConfig) error {
+func runServerCommand(ctx context.Context, cmd *cli.Command, cfg *serverConfig) error {
+	if err := transfer.CheckPending(cfg.server.dataDir); err != nil {
+		return err
+	}
+	database, err := postgres.Open(ctx, postgres.DefaultConfig(strings.TrimSpace(os.Getenv("LEAFWIKI_DATABASE_URL"))))
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	if err := database.CheckSchema(ctx); err != nil {
+		return err
+	}
 	basePath := normalizeBasePath(cfg.server.basePath)
 	maxAssetUploadSize := mustParseByteSize(cfg.frontend.maxAssetUploadSize, "max asset upload size")
 	restoreUploadMaxSize := mustParseByteSize(cfg.backup.restoreUploadMaxSize, "restore upload max size")
@@ -212,7 +235,7 @@ func runServerCommand(_ context.Context, cmd *cli.Command, cfg *serverConfig) er
 		slog.Default().Info("Data directory created", "path", cfg.server.dataDir)
 	}
 
-	publicAccessService := buildPublicAccessService(cmd, cfg)
+	publicAccessService := buildPublicAccessService(cmd, cfg, database)
 
 	if !cfg.auth.disableAuth {
 		if cfg.auth.jwtSecret == "" {
@@ -240,6 +263,7 @@ func runServerCommand(_ context.Context, cmd *cli.Command, cfg *serverConfig) er
 		RefreshTokenTimeout:    cfg.auth.refreshTokenTimeout,
 		AuthDisabled:           cfg.auth.disableAuth,
 		EnableRevision:         cfg.frontend.enableRevision,
+		Postgres:               database,
 		EnableAPIKeyManagement: cfg.frontend.enableAPIKeyManagement,
 		MaxRevisionHistory:     cfg.frontend.maxRevisionHistory,
 		EditorLimit:            cfg.auth.editorLimit,
@@ -279,21 +303,24 @@ func runServerCommand(_ context.Context, cmd *cli.Command, cfg *serverConfig) er
 	}()
 
 	// Initialize git backup (env-managed vs settings-managed — see buildBackupManager).
-	backupManager, err := buildBackupManager(cfg)
-	if err != nil {
-		fail("git backup init failed: %v", err)
-	}
+	backupManager := backup.NewPostgresUnavailableManager()
 	defer backupManager.Stop()
 	w.SetBackupRoutes(wikibackup.NewRoutes(backupManager, w.AuthService()))
 
 	// Initialize full backup snapshots if enabled
 	var writeGate *restore.WriteGate
 	if cfg.backup.snapshot {
+		writeGate = restore.NewWriteGate()
 		snapshotsDir := cfg.backup.snapshotDir
 		if snapshotsDir == "" {
 			snapshotsDir = filepath.Join(cfg.server.dataDir, "snapshots")
 		}
 		snapshotManager := snapshot.NewManager(snapshot.Config{
+			Database:           database,
+			DatabaseURL:        strings.TrimSpace(os.Getenv("LEAFWIKI_DATABASE_URL")),
+			DataDir:            cfg.server.dataDir,
+			Freeze:             writeGate.Freeze,
+			Postgres:           true,
 			BackupsDir:         snapshotsDir,
 			RootDir:            filepath.Join(cfg.server.dataDir, "root"),
 			AssetsDir:          filepath.Join(cfg.server.dataDir, "assets"),
@@ -313,8 +340,9 @@ func runServerCommand(_ context.Context, cmd *cli.Command, cfg *serverConfig) er
 		defer snapshotScheduler.Stop()
 		w.SetSnapshotRoutes(wikisnapshot.NewRoutes(snapshotManager, snapshotScheduler, w.AuthService(), cfg.backup.snapshotRetention))
 
-		writeGate = restore.NewWriteGate()
 		restoreManager := restore.NewManager(restore.Config{
+			Database:           database,
+			DatabaseURL:        strings.TrimSpace(os.Getenv("LEAFWIKI_DATABASE_URL")),
 			SnapshotManager:    snapshotManager,
 			DataDir:            cfg.server.dataDir,
 			WikiVersion:        Version,
@@ -400,11 +428,11 @@ func runServerCommand(_ context.Context, cmd *cli.Command, cfg *serverConfig) er
 // today's behaviour and get a status-only Settings view). Otherwise it is
 // settings-managed, reading its initial value from
 // <data-dir>/public-access.json (absent ⇒ disabled).
-func buildPublicAccessService(cmd *cli.Command, cfg *serverConfig) *publicaccess.Service {
+func buildPublicAccessService(cmd *cli.Command, cfg *serverConfig, database *postgres.Store) *publicaccess.Service {
 	if cmd.IsSet("public-access") || cfg.auth.disableAuth {
 		return publicaccess.NewEnvManaged(cfg.auth.publicAccess || cfg.auth.disableAuth)
 	}
-	svc, err := publicaccess.NewSettingsManaged(cfg.server.dataDir)
+	svc, err := publicaccess.NewPostgresSettingsManaged(database)
 	if err != nil {
 		fail("Failed to load public-access configuration", "error", err)
 	}

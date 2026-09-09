@@ -10,6 +10,8 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/perber/wiki/internal/core/auth"
+	"github.com/perber/wiki/internal/storage/postgres"
+	"github.com/perber/wiki/internal/transfer"
 )
 
 const (
@@ -32,6 +34,7 @@ const rootUsageText = `leafwiki --jwt-secret <SECRET> --admin-password <PASSWORD
 leafwiki --disable-auth [--host <HOST>] [--port <PORT>] [--unix-socket <PATH>] [--data-dir <DIR>]
 leafwiki reset-admin-password
 leafwiki [--data-dir <DIR>] restore-snapshot <path-to-zip>
+leafwiki database [--database-url <URL>] migrate|status
 leafwiki --help`
 
 const rootDescription = `Every option can also be set through the environment variable shown next to it.
@@ -99,6 +102,7 @@ func newRootCommandWithConfig(cfg *serverConfig) *cli.Command {
 		Commands: []*cli.Command{
 			newResetAdminPasswordCommand(cfg),
 			newRestoreSnapshotCommand(cfg),
+			newDatabaseCommand(),
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			// The log-format validator has already rejected anything parseLogFormat
@@ -127,11 +131,32 @@ func newResetAdminPasswordCommand(cfg *serverConfig) *cli.Command {
 }
 
 func newRestoreSnapshotCommand(cfg *serverConfig) *cli.Command {
+	var replace bool
 	return &cli.Command{
-		Name:      "restore-snapshot",
-		Usage:     "Restore a snapshot ZIP into the data directory while the server is stopped",
-		ArgsUsage: "<path-to-zip>",
-		Action: func(_ context.Context, cmd *cli.Command) error {
+		Name:        "restore-snapshot",
+		Usage:       "Restore a snapshot ZIP into the data directory while the server is stopped",
+		ArgsUsage:   "<path-to-zip>",
+		Description: transfer.TrustNotice,
+		Flags:       []cli.Flag{&cli.BoolFlag{Name: "replace", Usage: "Explicitly replace existing PostgreSQL data and assets (server must be stopped)", Destination: &replace}},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if dsn := strings.TrimSpace(os.Getenv("LEAFWIKI_DATABASE_URL")); dsn != "" {
+				if cmd.Args().Len() != 1 {
+					return errRestoreSnapshotUsage
+				}
+				if _, err := fmt.Fprintln(cmd.Root().ErrWriter, transfer.TrustNotice); err != nil {
+					return err
+				}
+				pg, err := postgres.Open(ctx, postgres.DefaultConfig(dsn))
+				if err != nil {
+					return err
+				}
+				defer pg.Close()
+				if err := transfer.RestoreBackup(ctx, pg, dsn, cfg.server.dataDir, cmd.Args().First(), transfer.PGTools{}, transfer.RestoreOptions{Replace: replace}); err != nil {
+					return err
+				}
+				_, err = fmt.Fprintln(cmd.Root().Writer, "Complete PostgreSQL snapshot restored. Start the server normally.")
+				return err
+			}
 			return runRestoreSnapshotCommand(cfg.server.dataDir, cmd.Args().First())
 		},
 	}

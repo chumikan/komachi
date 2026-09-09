@@ -12,13 +12,13 @@ import (
 
 // SearchIndexSideEffect updates the search index after every page mutation.
 type SearchIndexSideEffect struct {
-	index   *search.SQLiteIndex
+	index   search.Index
 	tree    *tree.TreeService // only used by IndexAllPages for the initial walk
 	log     *slog.Logger
 	metrics *httpmetrics.HTTPMetrics
 }
 
-func NewSearchIndexSideEffect(index *search.SQLiteIndex, treeService *tree.TreeService, log *slog.Logger, metrics *httpmetrics.HTTPMetrics) *SearchIndexSideEffect {
+func NewSearchIndexSideEffect(index search.Index, treeService *tree.TreeService, log *slog.Logger, metrics *httpmetrics.HTTPMetrics) *SearchIndexSideEffect {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -35,11 +35,19 @@ func (e *SearchIndexSideEffect) Apply(event PageSaveEvent) {
 	}
 
 	switch event.Operation {
-	case PageOperationCreate, PageOperationUpdate, PageOperationRestore:
+	case PageOperationCreate, PageOperationRestore:
 		if event.After != nil {
 			e.indexPage(event.After, event.Operation)
 		}
 
+	case PageOperationUpdate:
+		if !event.SlugChanged {
+			if event.After != nil {
+				e.indexPage(event.After, event.Operation)
+			}
+			return
+		}
+		fallthrough
 	case PageOperationMove:
 		inputs := make([]search.IndexPageInput, 0, len(event.AffectedPages))
 		for _, page := range event.AffectedPages {
@@ -76,7 +84,7 @@ func buildIndexInput(page *tree.Page) search.IndexPageInput {
 		filePath += ".md"
 	}
 	return search.IndexPageInput{
-		Path: path, FilePath: filePath, PageID: page.ID, Title: page.Title, Kind: page.Kind, Raw: page.RawContent,
+		CurrentPage: true, Path: path, FilePath: filePath, PageID: page.ID, Title: page.Title, Kind: page.Kind, Raw: page.RawContent,
 	}
 }
 
@@ -130,12 +138,13 @@ func (e *SearchIndexSideEffect) indexPage(page *tree.Page, operation PageOperati
 }
 
 func (e *SearchIndexSideEffect) writeToIndex(page *tree.Page, content string, operation PageOperationType) {
-	path := strings.TrimPrefix(page.CalculatePath(), "/")
-	filePath := path
-	if filePath != "" {
-		filePath += ".md"
+	input := buildIndexInput(page)
+	input.Raw = content
+	failures, err := e.index.IndexPages([]search.IndexPageInput{input})
+	if err == nil && len(failures) > 0 {
+		err = failures[0].Err
 	}
-	if err := e.index.IndexPage(path, filePath, page.ID, page.Title, page.Kind, content); err != nil {
+	if err != nil {
 		e.log.Warn("failed to update search index for page", "pageID", page.ID, "error", err)
 		if operation != "" {
 			e.metrics.IncPageSaveSideEffectFailure(string(operation), e.Name())

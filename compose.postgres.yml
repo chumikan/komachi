@@ -1,0 +1,44 @@
+# Development/integration environment for PostgreSQL page/history persistence.
+name: leafwiki-postgres
+services:
+  postgres:
+    image: groonga/pgroonga:4.0.8-alpine-17@sha256:e61f2b18d62287326878b83ea3bbde4f02efe9859da3285400e0b7af36c1e976
+    environment:
+      POSTGRES_USER: leafwiki
+      POSTGRES_PASSWORD: leafwiki_dev_password
+      POSTGRES_DB: leafwiki
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
+    ports:
+      - "127.0.0.1:${LEAFWIKI_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U leafwiki -d leafwiki"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  database:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: deploy/postgres/Dockerfile
+    environment:
+      LEAFWIKI_DATABASE_URL: postgres://leafwiki:leafwiki_dev_password@postgres:5432/leafwiki?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["database", "migrate"]
+  integration:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: deploy/postgres/Dockerfile
+    environment:
+      LEAFWIKI_TEST_DATABASE_URL: postgres://leafwiki:leafwiki_dev_password@postgres:5432/leafwiki?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["go"]
+    command: ["test", "-count=1", "-v", "./internal/storage/postgres/...", "./internal/core/tree/...", "./internal/core/auth/...", "./internal/favorites/...", "./internal/usersettings/...", "./internal/publicaccess/...", "./internal/branding/...", "./internal/wiki/...", "./internal/links/...", "./internal/tags/...", "./internal/properties/...", "./internal/search/...", "./internal/transfer/...", "./internal/snapshot/...", "./internal/restore/...", "./cmd/leafwiki/..."]
+volumes:
+  postgres-data:

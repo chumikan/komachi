@@ -13,12 +13,12 @@ type checkResult struct {
 }
 
 type HealthUseCase struct {
-	index      *search.SQLiteIndex
+	index      search.Index
 	status     *search.IndexingStatus
 	storageDir string
 }
 
-func NewHealthUseCase(index *search.SQLiteIndex, status *search.IndexingStatus, storageDir string) *HealthUseCase {
+func NewHealthUseCase(index search.Index, status *search.IndexingStatus, storageDir string) *HealthUseCase {
 	return &HealthUseCase{
 		index:      index,
 		status:     status,

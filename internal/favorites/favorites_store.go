@@ -6,6 +6,7 @@ package favorites
 import (
 	"database/sql"
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,8 @@ func errFavoritesStoreUnavailable() error {
 }
 
 type FavoritesStore struct {
+	pg *postgres.Store
+	tx *sql.Tx
 	mu sync.Mutex
 	db *sql.DB
 	// suspended is set by PauseForSwap and makes withDB refuse to serve
@@ -97,9 +100,9 @@ func (s *FavoritesStore) withDB(fn func(db *sql.DB) error) error {
 
 // Add favorites pageID for userID. Idempotent — favoriting an already-favorited page is a no-op.
 func (s *FavoritesStore) Add(userID, pageID string) error {
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(
-			`INSERT OR IGNORE INTO favorites (user_id, page_id, created_at) VALUES (?, ?, ?)`,
+			`INSERT INTO favorites (user_id, page_id, created_at) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
 			userID, pageID, time.Now().UTC(),
 		)
 		return err
@@ -112,8 +115,8 @@ func (s *FavoritesStore) Add(userID, pageID string) error {
 
 // Remove un-favorites pageID for userID. Idempotent — removing a non-favorited page is a no-op.
 func (s *FavoritesStore) Remove(userID, pageID string) error {
-	err := s.withDB(func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM favorites WHERE user_id = ? AND page_id = ?`, userID, pageID)
+	err := s.withQueries(func(db postgres.SQLQueries) error {
+		_, err := db.Exec(`DELETE FROM favorites WHERE user_id = $1 AND page_id = $2`, userID, pageID)
 		return err
 	})
 	if err != nil {
@@ -125,9 +128,13 @@ func (s *FavoritesStore) Remove(userID, pageID string) error {
 // ListPageIDsForUser returns the page IDs favorited by userID, most recently favorited first.
 func (s *FavoritesStore) ListPageIDsForUser(userID string) ([]string, error) {
 	var pageIDs []string
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
+		order := `SELECT page_id FROM favorites WHERE user_id = $1 ORDER BY created_at DESC`
+		if s.pg != nil {
+			order += `, created_at_submicro DESC`
+		}
 		rows, err := db.Query(
-			`SELECT page_id FROM favorites WHERE user_id = ? ORDER BY created_at DESC`,
+			order,
 			userID,
 		)
 		if err != nil {
@@ -152,8 +159,8 @@ func (s *FavoritesStore) ListPageIDsForUser(userID string) ([]string, error) {
 
 // DeleteAllForPage removes every user's favorite of pageID. Called on page delete.
 func (s *FavoritesStore) DeleteAllForPage(pageID string) error {
-	err := s.withDB(func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM favorites WHERE page_id = ?`, pageID)
+	err := s.withQueries(func(db postgres.SQLQueries) error {
+		_, err := db.Exec(`DELETE FROM favorites WHERE page_id = $1`, pageID)
 		return err
 	})
 	if err != nil {
@@ -164,8 +171,8 @@ func (s *FavoritesStore) DeleteAllForPage(pageID string) error {
 
 // DeleteAllForUser removes every favorite belonging to userID. Called on user delete.
 func (s *FavoritesStore) DeleteAllForUser(userID string) error {
-	err := s.withDB(func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM favorites WHERE user_id = ?`, userID)
+	err := s.withQueries(func(db postgres.SQLQueries) error {
+		_, err := db.Exec(`DELETE FROM favorites WHERE user_id = $1`, userID)
 		return err
 	})
 	if err != nil {
@@ -180,6 +187,10 @@ func (s *FavoritesStore) DeleteAllForUser(userID string) error {
 // restore renames it. Idempotent: a second call is a safe no-op. Mirrors
 // APIKeyStore.suspend.
 func (s *FavoritesStore) PauseForSwap() error {
+	if s.pg != nil {
+		return fmt.Errorf("legacy workspace restore cannot replace PostgreSQL FavoritesStore; PostgreSQL restore is a separate operation")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -200,6 +211,10 @@ func (s *FavoritesStore) PauseForSwap() error {
 // pointer. Mirrors APIKeyService.Replace, adapted for the fact that
 // FavoritesStore has no separate service-layer indirection to swap.
 func (s *FavoritesStore) Replace(storageDir string) error {
+	if s.pg != nil {
+		return fmt.Errorf("legacy workspace restore cannot replace PostgreSQL FavoritesStore; PostgreSQL restore is a separate operation")
+	}
+
 	fresh, err := NewFavoritesStore(storageDir, s.log)
 	if err != nil {
 		return err
@@ -231,3 +246,16 @@ func (s *FavoritesStore) Close() error {
 	}
 	return nil
 }
+
+func (s *FavoritesStore) withQueries(fn func(postgres.SQLQueries) error) error {
+	if s.tx != nil {
+		return fn(s.tx)
+	}
+	return s.withDB(func(db *sql.DB) error { return fn(db) })
+}
+
+func NewPostgresFavoritesStore(pg *postgres.Store, log *slog.Logger) *FavoritesStore {
+	return &FavoritesStore{pg: pg, db: pg.SQLDB(), log: log}
+}
+
+func (s *FavoritesStore) UsesPostgres() bool { return s.pg != nil }

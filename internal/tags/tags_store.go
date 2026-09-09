@@ -3,6 +3,7 @@ package tags
 import (
 	"database/sql"
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,11 +21,19 @@ const (
 type TagsStore struct {
 	mu sync.Mutex
 	db *sql.DB
+	pg bool
 }
 
 type TagCount struct {
 	Tag   string `json:"tag"`
 	Count int    `json:"count"`
+}
+
+func NewPostgresTagsStore(store *postgres.Store) (*TagsStore, error) {
+	if store == nil {
+		return nil, fmt.Errorf("PostgreSQL store is required")
+	}
+	return &TagsStore{db: store.SQLDB(), pg: true}, nil
 }
 
 func NewTagsStore(storageDir string) (*TagsStore, error) {
@@ -79,13 +88,13 @@ func (s *TagsStore) SetTagsForPage(pageID string, tags []string) error {
 		return err
 	}
 
-	if _, err := tx.Exec(`DELETE FROM page_tags WHERE page_id = ?`, pageID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM page_tags WHERE page_id = $1`, pageID); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("failed to clear tags for page %s: %w", pageID, err)
 	}
 
 	if len(tags) > 0 {
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO page_tags(page_id, tag) VALUES (?, ?)`)
+		stmt, err := tx.Prepare(`INSERT INTO page_tags(page_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING`)
 		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("failed to prepare tag insert: %w", err)
@@ -107,13 +116,17 @@ func (s *TagsStore) DeleteTagsForPage(pageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(`DELETE FROM page_tags WHERE page_id = ?`, pageID)
+	_, err := s.db.Exec(`DELETE FROM page_tags WHERE page_id = $1`, pageID)
 	return err
 }
 
 // SetPageIndex atomically replaces tags and excerpt for a page.
 // Tags must already be normalized (lowercase, trimmed, deduped) by the caller.
 func (s *TagsStore) SetPageIndex(pageID string, tags []string, excerpt string) error {
+	return s.setPageIndex(pageID, tags, excerpt, nil)
+}
+
+func (s *TagsStore) setPageIndex(pageID string, tags []string, excerpt string, sourceRaw *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -122,13 +135,24 @@ func (s *TagsStore) SetPageIndex(pageID string, tags []string, excerpt string) e
 		return err
 	}
 
-	if _, err := tx.Exec(`DELETE FROM page_tags WHERE page_id = ?`, pageID); err != nil {
+	defer tx.Rollback()
+	if s.pg && sourceRaw != nil {
+		matches, err := postgres.CurrentPageMatches(tx, pageID, *sourceRaw, nil)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return nil
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM page_tags WHERE page_id = $1`, pageID); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("failed to clear tags for page %s: %w", pageID, err)
 	}
 
 	if len(tags) > 0 {
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO page_tags(page_id, tag) VALUES (?, ?)`)
+		stmt, err := tx.Prepare(`INSERT INTO page_tags(page_id, tag) VALUES ($1, $2) ON CONFLICT DO NOTHING`)
 		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("failed to prepare tag insert: %w", err)
@@ -144,7 +168,7 @@ func (s *TagsStore) SetPageIndex(pageID string, tags []string, excerpt string) e
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO page_meta(page_id, excerpt) VALUES (?, ?)
+		`INSERT INTO page_meta(page_id, excerpt) VALUES ($1, $2)
 		 ON CONFLICT(page_id) DO UPDATE SET excerpt = excluded.excerpt`,
 		pageID, excerpt,
 	); err != nil {
@@ -165,11 +189,11 @@ func (s *TagsStore) DeletePageIndex(pageID string) error {
 		return err
 	}
 
-	if _, err := tx.Exec(`DELETE FROM page_tags WHERE page_id = ?`, pageID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM page_tags WHERE page_id = $1`, pageID); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM page_meta WHERE page_id = ?`, pageID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM page_meta WHERE page_id = $1`, pageID); err != nil {
 		_ = tx.Rollback()
 		return err
 	}
@@ -195,13 +219,13 @@ func (s *TagsStore) DeletePageIndexes(pageIDs []string) error {
 		_ = tx.Rollback()
 	}()
 
-	tagsStmt, err := tx.Prepare(`DELETE FROM page_tags WHERE page_id = ?`)
+	tagsStmt, err := tx.Prepare(`DELETE FROM page_tags WHERE page_id = $1`)
 	if err != nil {
 		return err
 	}
 	defer shared.LogClose(tagsStmt.Close, "could not close statement")
 
-	metaStmt, err := tx.Prepare(`DELETE FROM page_meta WHERE page_id = ?`)
+	metaStmt, err := tx.Prepare(`DELETE FROM page_meta WHERE page_id = $1`)
 	if err != nil {
 		return err
 	}
@@ -228,7 +252,7 @@ func (s *TagsStore) GetExcerptsForPages(pageIDs []string) (map[string]string, er
 		return map[string]string{}, nil
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(pageIDs)), ",")
+	placeholders := postgres.Placeholders(1, len(pageIDs))
 	args := make([]any, len(pageIDs))
 	for i, id := range pageIDs {
 		args[i] = id
@@ -281,7 +305,7 @@ func (s *TagsStore) GetAllTags(filter string, limit int) ([]TagCount, error) {
 	query := `
 		SELECT tag, COUNT(DISTINCT page_id) AS count
 		FROM page_tags
-		WHERE tag LIKE ? || '%' ESCAPE '\'
+		WHERE ` + s.prefixPredicate("tag", "$1") + `
 		GROUP BY tag
 		ORDER BY count DESC, tag ASC
 	`
@@ -318,7 +342,7 @@ func (s *TagsStore) GetAllTagsForSelection(filter string, selected []string, lim
 	}
 
 	filterArg := escapeLikePrefix(filter)
-	selectionPlaceholders := strings.TrimRight(strings.Repeat("?,", len(selected)), ",")
+	selectionPlaceholders := postgres.Placeholders(1, len(selected))
 	args := make([]any, 0, len(selected)*2+2)
 	for _, tag := range selected {
 		args = append(args, tag)
@@ -334,16 +358,16 @@ func (s *TagsStore) GetAllTagsForSelection(filter string, selected []string, lim
 			FROM page_tags
 			WHERE tag IN (%s)
 			GROUP BY page_id
-			HAVING COUNT(DISTINCT tag) = ?
+			HAVING COUNT(DISTINCT tag) = $%d
 		)
 		SELECT pt.tag, COUNT(DISTINCT pt.page_id) AS count
 		FROM page_tags pt
 		JOIN matching_pages mp ON mp.page_id = pt.page_id
-		WHERE pt.tag LIKE ? || '%%' ESCAPE '\'
+		WHERE %s
 		  AND pt.tag NOT IN (%s)
 		GROUP BY pt.tag
 		ORDER BY count DESC, tag ASC
-	`, selectionPlaceholders, selectionPlaceholders)
+	`, selectionPlaceholders, len(selected)+1, s.prefixPredicate("pt.tag", fmt.Sprintf("$%d", len(selected)+2)), postgres.Placeholders(len(selected)+3, len(selected)))
 	if limit > 0 {
 		query += fmt.Sprintf(sqlLimitFmt, limit)
 	}
@@ -380,14 +404,14 @@ func (s *TagsStore) GetPageIDsByTags(tags []string) ([]string, error) {
 	}
 	args = append(args, len(tags))
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(tags)), ",")
+	placeholders := postgres.Placeholders(1, len(tags))
 	rows, err := s.db.Query(fmt.Sprintf(`
 		SELECT page_id
 		FROM page_tags
 		WHERE tag IN (%s)
 		GROUP BY page_id
-		HAVING COUNT(DISTINCT tag) = ?
-	`, placeholders), args...)
+		HAVING COUNT(DISTINCT tag) = $%d
+	`, placeholders, len(tags)+1), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +432,7 @@ func (s *TagsStore) getAllTagsLocked(filter string, limit int) ([]TagCount, erro
 	query := `
 		SELECT tag, COUNT(DISTINCT page_id) AS count
 		FROM page_tags
-		WHERE tag LIKE ? || '%' ESCAPE '\'
+		WHERE ` + s.prefixPredicate("tag", "$1") + `
 		GROUP BY tag
 		ORDER BY count DESC, tag ASC
 	`
@@ -442,7 +466,7 @@ func (s *TagsStore) GetTagsForPages(pageIDs []string) (map[string][]string, erro
 		return map[string][]string{}, nil
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(pageIDs)), ",")
+	placeholders := postgres.Placeholders(1, len(pageIDs))
 	args := make([]any, len(pageIDs))
 	for i, id := range pageIDs {
 		args[i] = id
@@ -489,4 +513,11 @@ func (s *TagsStore) Close() error {
 		s.db = nil
 	}
 	return nil
+}
+
+func (s *TagsStore) prefixPredicate(column, parameter string) string {
+	if s.pg {
+		return postgres.ASCIIFold(column) + " LIKE " + postgres.ASCIIFold(parameter) + ` || '%' ESCAPE '\'`
+	}
+	return column + " LIKE " + parameter + ` || '%' ESCAPE '\'`
 }

@@ -14,13 +14,15 @@ func NewPropertiesService(store *PropertiesStore) *PropertiesService {
 	return &PropertiesService{store: store}
 }
 
+func (s *PropertiesService) Close() error { return s.store.Close() }
+
 func (s *PropertiesService) ClearIndex() error {
 	return s.store.Clear()
 }
 
 func (s *PropertiesService) IndexPageContent(pageID, rawContent string) error {
 	props := ExtractPropertiesFromContent(rawContent)
-	return s.store.SetPropertiesForPage(pageID, props)
+	return s.store.setPropertiesForPage(pageID, props, &rawContent)
 }
 
 func (s *PropertiesService) SetPropertiesForPage(pageID string, props map[string]PropertyEntry) error {

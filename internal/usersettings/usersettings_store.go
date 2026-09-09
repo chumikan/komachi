@@ -3,10 +3,12 @@ package usersettings
 import (
 	"database/sql"
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	sharederrors "github.com/perber/wiki/internal/core/shared/errors"
 	"github.com/perber/wiki/internal/core/shared/sqliteutil"
@@ -30,6 +32,8 @@ func errUserSettingsStoreUnavailable() error {
 }
 
 type UserSettingsStore struct {
+	pg *postgres.Store
+	tx *sql.Tx
 	mu sync.Mutex
 	db *sql.DB
 	// suspended is set by PauseForSwap and makes every query method refuse
@@ -64,7 +68,7 @@ func NewUserSettingsStore(storageDir string, log *slog.Logger) (*UserSettingsSto
 }
 
 func (s *UserSettingsStore) ensureSchema() error {
-	if _, err := s.db.Exec(`
+	if _, err := s.queries().Exec(`
 		CREATE TABLE IF NOT EXISTS user_settings (
 			user_id     TEXT PRIMARY KEY,
 			language    TEXT NOT NULL,
@@ -101,7 +105,7 @@ func (s *UserSettingsStore) ensureFormatColumns() error {
 		if existing[m.column] {
 			continue
 		}
-		if _, err := s.db.Exec(m.ddl); err != nil {
+		if _, err := s.queries().Exec(m.ddl); err != nil {
 			return fmt.Errorf("failed to add column %s to user_settings table: %w", m.column, err)
 		}
 	}
@@ -141,18 +145,30 @@ func (s *UserSettingsStore) Get(userID string) (*UserSettings, error) {
 }
 
 func (s *UserSettingsStore) getLocked(userID string) (*UserSettings, error) {
-	row := s.db.QueryRow(
-		`SELECT language, autosave, date_format, time_format, updated_at FROM user_settings WHERE user_id = ?`,
+	row := s.queries().QueryRow(
+		`SELECT language, autosave, date_format, time_format, updated_at FROM user_settings WHERE user_id = $1`,
 		userID,
 	)
 
 	var us UserSettings
 	us.UserID = userID
-	if err := row.Scan(&us.Language, &us.AutoSave, &us.DateFormat, &us.TimeFormat, &us.UpdatedAt); err != nil {
+	var updatedAt any = &us.UpdatedAt
+	var timestamp string
+	if s.pg != nil {
+		updatedAt = &timestamp
+	}
+	if err := row.Scan(&us.Language, &us.AutoSave, &us.DateFormat, &us.TimeFormat, updatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return DefaultUserSettings(userID), nil
 		}
 		return nil, fmt.Errorf("failed to get user settings for user %s: %w", userID, err)
+	}
+	if s.pg != nil {
+		parsed, err := time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("invalid stored user settings timestamp: %w", err)
+		}
+		us.UpdatedAt = parsed
 	}
 	return &us, nil
 }
@@ -169,16 +185,20 @@ func (s *UserSettingsStore) Upsert(us *UserSettings) error {
 }
 
 func (s *UserSettingsStore) upsertLocked(us *UserSettings) error {
-	_, err := s.db.Exec(
+	var updatedAt any = us.UpdatedAt
+	if s.pg != nil {
+		updatedAt = us.UpdatedAt.Format(time.RFC3339Nano)
+	}
+	_, err := s.queries().Exec(
 		`INSERT INTO user_settings (user_id, language, autosave, date_format, time_format, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT(user_id) DO UPDATE SET
 		   language = excluded.language,
 		   autosave = excluded.autosave,
 		   date_format = excluded.date_format,
 		   time_format = excluded.time_format,
 		   updated_at = excluded.updated_at`,
-		us.UserID, us.Language, us.AutoSave, us.DateFormat, us.TimeFormat, us.UpdatedAt,
+		us.UserID, us.Language, us.AutoSave, us.DateFormat, us.TimeFormat, updatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to save user settings for user %s: %w", us.UserID, err)
@@ -191,6 +211,25 @@ func (s *UserSettingsStore) upsertLocked(us *UserSettings) error {
 // two concurrent updates for the same user can't race and silently drop one
 // of the two changes.
 func (s *UserSettingsStore) UpdateAtomic(userID string, mutate func(*UserSettings)) (*UserSettings, error) {
+	if s.pg != nil && s.tx == nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.suspended || s.db == nil {
+			return nil, errUserSettingsStoreUnavailable()
+		}
+		var out *UserSettings
+		err := postgres.WithSQLTx(s.db, func(tx *sql.Tx) error {
+			if _, err := tx.Exec("LOCK TABLE user_settings IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+				return err
+			}
+			local := &UserSettingsStore{pg: s.pg, db: s.db, tx: tx, log: s.log}
+			var err error
+			out, err = local.UpdateAtomic(userID, mutate)
+			return err
+		})
+		return out, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -218,7 +257,7 @@ func (s *UserSettingsStore) DeleteAllForUser(userID string) error {
 		return errUserSettingsStoreUnavailable()
 	}
 
-	_, err := s.db.Exec(`DELETE FROM user_settings WHERE user_id = ?`, userID)
+	_, err := s.queries().Exec(`DELETE FROM user_settings WHERE user_id = $1`, userID)
 	if err != nil {
 		return fmt.Errorf("failed to delete user settings for user %s: %w", userID, err)
 	}
@@ -231,6 +270,10 @@ func (s *UserSettingsStore) DeleteAllForUser(userID string) error {
 // restore renames it. Idempotent: a second call is a safe no-op. Mirrors
 // favorites.FavoritesStore.PauseForSwap / APIKeyStore.suspend.
 func (s *UserSettingsStore) PauseForSwap() error {
+	if s.pg != nil {
+		return fmt.Errorf("legacy workspace restore cannot replace PostgreSQL UserSettingsStore; PostgreSQL restore is a separate operation")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -250,6 +293,10 @@ func (s *UserSettingsStore) PauseForSwap() error {
 // identity: no caller needs to be told about the new connection, they
 // already hold this pointer. Mirrors favorites.FavoritesStore.Replace.
 func (s *UserSettingsStore) Replace(storageDir string) error {
+	if s.pg != nil {
+		return fmt.Errorf("legacy workspace restore cannot replace PostgreSQL UserSettingsStore; PostgreSQL restore is a separate operation")
+	}
+
 	fresh, err := NewUserSettingsStore(storageDir, s.log)
 	if err != nil {
 		return err
@@ -280,4 +327,15 @@ func (s *UserSettingsStore) Close() error {
 		s.db = nil
 	}
 	return nil
+}
+
+func (s *UserSettingsStore) queries() postgres.SQLQueries {
+	if s.tx != nil {
+		return s.tx
+	}
+	return s.db
+}
+
+func NewPostgresUserSettingsStore(pg *postgres.Store, log *slog.Logger) *UserSettingsStore {
+	return &UserSettingsStore{pg: pg, db: pg.SQLDB(), log: log}
 }

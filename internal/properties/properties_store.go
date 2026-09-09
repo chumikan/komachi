@@ -3,6 +3,7 @@ package properties
 import (
 	"database/sql"
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,6 +30,14 @@ const logCloseRowsFailed = "could not close rows"
 type PropertiesStore struct {
 	mu sync.Mutex
 	db *sql.DB
+	pg bool
+}
+
+func NewPostgresPropertiesStore(store *postgres.Store) (*PropertiesStore, error) {
+	if store == nil {
+		return nil, fmt.Errorf("PostgreSQL store is required")
+	}
+	return &PropertiesStore{db: store.SQLDB(), pg: true}, nil
 }
 
 func NewPropertiesStore(storageDir string) (*PropertiesStore, error) {
@@ -75,6 +84,10 @@ func (s *PropertiesStore) ensureSchema() error {
 // and type coercion are the caller's responsibility. All write paths go through
 // PropertiesService.SetPropertiesForPage or ExtractPropertiesFromContent, which enforce this.
 func (s *PropertiesStore) SetPropertiesForPage(pageID string, props map[string]PropertyEntry) error {
+	return s.setPropertiesForPage(pageID, props, nil)
+}
+
+func (s *PropertiesStore) setPropertiesForPage(pageID string, props map[string]PropertyEntry, sourceRaw *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -83,13 +96,24 @@ func (s *PropertiesStore) SetPropertiesForPage(pageID string, props map[string]P
 		return err
 	}
 
-	if _, err := tx.Exec(`DELETE FROM page_properties WHERE page_id = ?`, pageID); err != nil {
+	defer tx.Rollback()
+	if s.pg && sourceRaw != nil {
+		matches, err := postgres.CurrentPageMatches(tx, pageID, *sourceRaw, nil)
+		if err != nil {
+			return err
+		}
+		if !matches {
+			return nil
+		}
+	}
+
+	if _, err := tx.Exec(`DELETE FROM page_properties WHERE page_id = $1`, pageID); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("failed to clear properties for page %s: %w", pageID, err)
 	}
 
 	if len(props) > 0 {
-		stmt, err := tx.Prepare(`INSERT OR IGNORE INTO page_properties(page_id, key, value, type) VALUES (?, ?, ?, ?)`)
+		stmt, err := tx.Prepare(`INSERT INTO page_properties(page_id, key, value, type) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`)
 		if err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("failed to prepare property insert: %w", err)
@@ -111,7 +135,7 @@ func (s *PropertiesStore) DeletePropertiesForPage(pageID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, err := s.db.Exec(`DELETE FROM page_properties WHERE page_id = ?`, pageID)
+	_, err := s.db.Exec(`DELETE FROM page_properties WHERE page_id = $1`, pageID)
 	return err
 }
 
@@ -132,7 +156,7 @@ func (s *PropertiesStore) GetAllPropertyKeys(filter string, limit int) ([]Proper
 	query := `
 		SELECT key, COUNT(DISTINCT page_id) AS count
 		FROM page_properties
-		WHERE key LIKE ? || '%' ESCAPE '\'
+		WHERE ` + s.prefixPredicate("key", "$1") + `
 		GROUP BY key
 		ORDER BY count DESC, key ASC
 	`
@@ -164,7 +188,7 @@ func (s *PropertiesStore) GetPageIDsByProperty(key, value string) ([]string, err
 
 	rows, err := s.db.Query(`
 		SELECT page_id FROM page_properties
-		WHERE key = ? AND value = ?
+		WHERE key = $1 AND value = $2
 	`, key, value)
 	if err != nil {
 		return nil, err
@@ -191,7 +215,7 @@ func (s *PropertiesStore) GetPropertiesForPages(pageIDs []string) (map[string]ma
 		return map[string]map[string]PropertyEntry{}, nil
 	}
 
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(pageIDs)), ",")
+	placeholders := postgres.Placeholders(1, len(pageIDs))
 	args := make([]any, len(pageIDs))
 	for i, id := range pageIDs {
 		args[i] = id
@@ -241,4 +265,11 @@ func escapeLikePrefix(s string) string {
 	s = strings.ReplaceAll(s, `%`, `\%`)
 	s = strings.ReplaceAll(s, `_`, `\_`)
 	return s
+}
+
+func (s *PropertiesStore) prefixPredicate(column, parameter string) string {
+	if s.pg {
+		return postgres.ASCIIFold(column) + " LIKE " + postgres.ASCIIFold(parameter) + ` || '%' ESCAPE '\'`
+	}
+	return column + " LIKE " + parameter + ` || '%' ESCAPE '\'`
 }

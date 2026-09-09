@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"database/sql"
 	"errors"
 	"log/slog"
 	"sync"
@@ -60,7 +61,13 @@ func (a *AuthService) UserService() *UserService {
 // traffic for the duration of the restore, and GET requests self-heal on
 // their next call.
 func (a *AuthService) ReplaceUserStore(storageDir string) error {
-	newStore, err := NewUserStore(storageDir)
+	var newStore *UserStore
+	var err error
+	if pg := a.users().store.pg; pg != nil {
+		newStore = NewPostgresUserStore(pg)
+	} else {
+		newStore, err = NewUserStore(storageDir)
+	}
 	if err != nil {
 		return err
 	}
@@ -120,6 +127,7 @@ func NewAuthService(userService *UserService, sessions *SessionManager, totpServ
 	// stay correct across a live-restore hot-swap — this closure calls
 	// a.users() fresh on every invocation rather than capturing one
 	// *UserService at construction time.
+	sessions.bindUserResolver = func(tx *sql.Tx) func(string) (*User, error) { return a.users().bind(tx).GetUserByID }
 	sessions.resolveUser = func(id string) (*User, error) {
 		return a.users().GetUserByID(id)
 	}
@@ -233,6 +241,16 @@ func (a *AuthService) IssueSessionForUser(userID string) (*AuthToken, error) {
 // success are the same access/refresh tokens issued that a password-only
 // login would have produced.
 func (a *AuthService) CompleteTOTPLogin(challengeToken, code string) (*AuthToken, error) {
+	if a.users().store.pg != nil && a.users().store.tx == nil {
+		var out *AuthToken
+		err := a.postgresTransaction(func(local *AuthService) error {
+			var err error
+			out, err = local.CompleteTOTPLogin(challengeToken, code)
+			return err
+		})
+		return out, err
+	}
+
 	if a.totp == nil {
 		return nil, errTOTPNotConfigured()
 	}
@@ -333,6 +351,16 @@ func (a *AuthService) StartTOTPSetup(userID, currentPassword string) (*Generated
 // hashes are persisted). Every other session for the user is revoked;
 // currentRefreshToken identifies the caller's own session, which is left intact.
 func (a *AuthService) ConfirmTOTPSetup(userID, code, currentRefreshToken string) ([]string, error) {
+	if a.users().store.pg != nil && a.users().store.tx == nil {
+		var out []string
+		err := a.postgresTransaction(func(local *AuthService) error {
+			var err error
+			out, err = local.ConfirmTOTPSetup(userID, code, currentRefreshToken)
+			return err
+		})
+		return out, err
+	}
+
 	if a.totp == nil {
 		return nil, errTOTPNotConfigured()
 	}
@@ -379,6 +407,12 @@ func (a *AuthService) ConfirmTOTPSetup(userID, code, currentRefreshToken string)
 // codes. Every other session for the user is revoked; currentRefreshToken
 // identifies the caller's own session, which is left intact.
 func (a *AuthService) DisableTOTP(userID, currentPassword, code, currentRefreshToken string) error {
+	if a.users().store.pg != nil && a.users().store.tx == nil {
+		return a.postgresTransaction(func(local *AuthService) error {
+			return local.DisableTOTP(userID, currentPassword, code, currentRefreshToken)
+		})
+	}
+
 	if a.totp == nil {
 		return errTOTPNotConfigured()
 	}

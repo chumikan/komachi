@@ -6,12 +6,17 @@ import (
 	"github.com/perber/wiki/internal/favorites"
 	"github.com/perber/wiki/internal/publicaccess"
 	"github.com/perber/wiki/internal/snapshot"
+	"github.com/perber/wiki/internal/storage/postgres"
+	"github.com/perber/wiki/internal/transfer"
 	"github.com/perber/wiki/internal/usersettings"
 )
 
 // Config holds everything the restore Manager needs to validate, stage, and
 // swap a snapshot back into a live instance.
 type Config struct {
+	Database    *postgres.Store
+	DatabaseURL string
+	PGTools     transfer.PGTools
 	// SnapshotManager resolves a snapshot id to its ZIP path (SnapshotZipPath
 	// is also the security boundary against path traversal — see
 	// internal/snapshot.Manager).

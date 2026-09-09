@@ -97,6 +97,16 @@ func (s *EmailTokenService) Close() {
 // (unlike ChangeOwnPassword, which does not revoke sessions today — that is
 // an intentional scope boundary, not an inconsistency to fix here).
 func (s *EmailTokenService) ConfirmPasswordReset(rawToken, newPassword string) (*User, error) {
+	if s.tokens.pg != nil && s.tokens.tx == nil {
+		var out *User
+		err := s.postgresTransaction(func(local *EmailTokenService) error {
+			var err error
+			out, err = local.ConfirmPasswordReset(rawToken, newPassword)
+			return err
+		})
+		return out, err
+	}
+
 	tok, err := s.tokens.Resolve(rawToken, PurposePasswordReset)
 	if err != nil {
 		return nil, err
@@ -134,6 +144,16 @@ func (s *EmailTokenService) IssueInvite(ctx context.Context, user *User) error {
 // session (a freshly invited user has no prior sessions to worry about,
 // unlike ConfirmPasswordReset).
 func (s *EmailTokenService) ConfirmInvite(rawToken, newPassword string) (*User, error) {
+	if s.tokens.pg != nil && s.tokens.tx == nil {
+		var out *User
+		err := s.postgresTransaction(func(local *EmailTokenService) error {
+			var err error
+			out, err = local.ConfirmInvite(rawToken, newPassword)
+			return err
+		})
+		return out, err
+	}
+
 	tok, err := s.tokens.Resolve(rawToken, PurposeInvite)
 	if err != nil {
 		return nil, err

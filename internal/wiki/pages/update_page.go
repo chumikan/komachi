@@ -51,7 +51,20 @@ func NewUpdatePageUseCase(
 }
 
 // Execute validates, updates the node, and fires post-save side effects.
-func (uc *UpdatePageUseCase) Execute(_ context.Context, in UpdatePageInput) (out *UpdatePageOutput, err error) {
+func (uc *UpdatePageUseCase) Execute(ctx context.Context, in UpdatePageInput) (out *UpdatePageOutput, err error) {
+	if uc.tree.UsesPostgres() {
+		var result *UpdatePageOutput
+		err := uc.orchestrator.Transact(ctx, uc.tree, func(local *tree.TreeService, o *pagesave.PageSaveOrchestrator) error {
+			copy := *uc
+			copy.tree = local
+			copy.orchestrator = o
+			var err error
+			result, err = copy.Execute(ctx, in)
+			return err
+		})
+		return result, err
+	}
+
 	started := time.Now()
 	defer func() {
 		uc.metrics.ObservePageSaveWorkflow(string(pagesave.PageOperationUpdate), err, started)

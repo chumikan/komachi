@@ -13,7 +13,7 @@ type Routes struct {
 }
 
 type RoutesConfig struct {
-	Index      *search.SQLiteIndex
+	Index      search.Index
 	Status     *search.IndexingStatus
 	StorageDir string
 }

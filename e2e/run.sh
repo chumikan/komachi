@@ -12,6 +12,9 @@ server_log=""
 server_bin=""
 local_data_dir=""
 docker_data_volume=""
+postgres_container=""
+postgres_volume=""
+postgres_network=""
 
 print_runner_diagnostics() {
   echo "--- E2E runtime diagnostics ---"
@@ -71,7 +74,31 @@ start_docker() {
   docker_data_volume="wiki-e2e-tests-data-${RANDOM}${RANDOM}"
   docker volume create "$docker_data_volume" >/dev/null
 
+  postgres_container="leafwiki-e2e-pg-${RANDOM}${RANDOM}"
+  postgres_volume="${postgres_container}-data"
+  postgres_network="${postgres_container}-network"
+  docker network create "$postgres_network" >/dev/null
+  docker volume create "$postgres_volume" >/dev/null
+  docker run -d --name "$postgres_container" --network "$postgres_network" \
+    --network-alias postgres -v "$postgres_volume":/var/lib/postgresql/data \
+    -e POSTGRES_USER=leafwiki -e POSTGRES_PASSWORD=e2e-only-password \
+    -e POSTGRES_DB=leafwiki \
+    groonga/pgroonga:4.0.8-alpine-17@sha256:e61f2b18d62287326878b83ea3bbde4f02efe9859da3285400e0b7af36c1e976 >/dev/null
+  local ready=false
+  for ((attempt=0; attempt<60; attempt++)); do
+    if docker exec "$postgres_container" pg_isready -h 127.0.0.1 -U leafwiki -d leafwiki >/dev/null 2>&1; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  if [ "$ready" != true ]; then echo "PostgreSQL did not become ready" >&2; return 1; fi
+  local database_url='postgres://leafwiki:e2e-only-password@postgres:5432/leafwiki?sslmode=disable'
+  docker run --rm --network "$postgres_network" -e LEAFWIKI_DATABASE_URL="$database_url" \
+    wiki-e2e-tests database migrate
+
   docker run -d \
+    --network "$postgres_network" -e LEAFWIKI_DATABASE_URL="$database_url" \
     -p "$app_port:8080" \
     --name wiki-e2e-tests \
     -v "$docker_data_volume":/app/data \
@@ -92,12 +119,16 @@ stop_docker() {
   docker stop wiki-e2e-tests >/dev/null 2>&1 || true
   docker rm wiki-e2e-tests >/dev/null 2>&1 || true
   docker rmi wiki-e2e-tests >/dev/null 2>&1 || true
+  if [ -n "$postgres_container" ]; then docker rm -f "$postgres_container" >/dev/null 2>&1 || true; fi
+  if [ -n "$postgres_volume" ]; then docker volume rm "$postgres_volume" >/dev/null 2>&1 || true; fi
+  if [ -n "$postgres_network" ]; then docker network rm "$postgres_network" >/dev/null 2>&1 || true; fi
   if [ -n "$docker_data_volume" ]; then
     docker volume rm "$docker_data_volume" >/dev/null 2>&1 || true
   fi
 }
 
 start_local() {
+  : "${LEAFWIKI_DATABASE_URL:?Set LEAFWIKI_DATABASE_URL to a dedicated migrated E2E database}"
   echo "🟢 Starting local LeafWiki process..."
   build_frontend_for_local_e2e
 
@@ -231,12 +262,104 @@ if nc -z localhost "$app_port" >/dev/null 2>&1; then
   fi
 fi
 
+trap cleanup_runner EXIT
+
 if [ "$run_mode" = "docker" ]; then
   start_docker
 else
   start_local
 fi
-trap cleanup_runner EXIT
+
+canonical_fingerprint() {
+  # Compare each field independently; diagnostics contain only field names and hashes.
+  docker exec "$postgres_container" psql -X -U leafwiki -d leafwiki -At -v ON_ERROR_STOP=1 \
+    -c "WITH rows AS (SELECT 'pages' AS tbl, id, to_jsonb(p) - 'current_revision_id' AS data FROM pages p UNION ALL SELECT 'users', id, to_jsonb(u) FROM users u UNION ALL SELECT 'sessions', id, to_jsonb(s) FROM sessions s) SELECT tbl, md5(id), field.key, md5(field.value::text) FROM rows CROSS JOIN LATERAL jsonb_each(data) field ORDER BY tbl, id, field.key" \
+    -c "SELECT version,checksum FROM schema_migrations ORDER BY version"
+}
+
+verify_docker_persistence() {
+  [ "$run_mode" = docker ] || return 0
+  local before after
+  # Test-only snapshots stay inside this disposable database. Startup may add
+  # baseline history for metadata-only edits, as in the filesystem contract.
+  docker exec -i "$postgres_container" psql -X -U leafwiki -d leafwiki -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+CREATE SCHEMA e2e_verification;
+CREATE TABLE e2e_verification.pages AS SELECT id,current_revision_id FROM pages;
+CREATE TABLE e2e_verification.revisions AS SELECT * FROM revisions;
+SQL
+  before=$(canonical_fingerprint)
+  docker restart "$postgres_container" >/dev/null
+  local ready=false
+  for ((attempt=0; attempt<60; attempt++)); do
+    if docker exec "$postgres_container" pg_isready -h 127.0.0.1 -U leafwiki -d leafwiki >/dev/null 2>&1; then ready=true; break; fi
+    sleep 1
+  done
+  [ "$ready" = true ] || return 1
+  # Existing app must reconnect before it is itself restarted.
+  curl --fail --silent --retry 20 --retry-all-errors --retry-delay 1 "$app_url/api/health" >/dev/null
+  docker restart wiki-e2e-tests >/dev/null
+  wait_until_reachable
+  curl --fail --silent --retry 20 --retry-all-errors --retry-delay 1 "$app_url/api/health" >/dev/null
+  after=$(canonical_fingerprint)
+  if [ "$before" != "$after" ]; then
+    echo "Restart changed canonical data (field hashes only):" >&2
+    diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") >&2 || true
+    return 1
+  fi
+  docker exec -i "$postgres_container" psql -X -U leafwiki -d leafwiki -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+  IF EXISTS (SELECT * FROM e2e_verification.revisions EXCEPT SELECT * FROM revisions) THEN
+    RAISE EXCEPTION 'Restart changed or removed an existing revision';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM revisions r
+    LEFT JOIN e2e_verification.revisions old ON old.page_id=r.page_id AND old.id=r.id
+    LEFT JOIN e2e_verification.pages p ON p.id=r.page_id
+    LEFT JOIN e2e_verification.revisions prior ON prior.page_id=p.id AND prior.id=p.current_revision_id
+    WHERE old.id IS NULL AND (
+      r.metadata->>'summary' IS DISTINCT FROM 'baseline' OR
+      r.metadata->>'type' IS DISTINCT FROM 'content_update' OR
+      r.metadata->>'author_id' IS DISTINCT FROM 'system' OR
+      prior.id IS NULL OR r.content_hash IS DISTINCT FROM prior.content_hash OR
+      r.metadata->>'extra_frontmatter_hash' IS NOT DISTINCT FROM prior.metadata->>'extra_frontmatter_hash'
+    )
+  ) THEN
+    RAISE EXCEPTION 'Restart created a revision other than the metadata-only baseline contract';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pages p JOIN e2e_verification.pages old ON old.id=p.id
+    WHERE p.current_revision_id IS DISTINCT FROM old.current_revision_id AND NOT EXISTS (
+      SELECT 1 FROM revisions r WHERE r.page_id=p.id AND r.id=p.current_revision_id
+      AND NOT EXISTS (SELECT 1 FROM e2e_verification.revisions b WHERE b.page_id=r.page_id AND b.id=r.id)
+    )
+  ) THEN
+    RAISE EXCEPTION 'Restart changed a pointer without creating its baseline revision';
+  END IF;
+END $$;
+SELECT count(*) AS verified_metadata_baselines FROM revisions r
+WHERE NOT EXISTS (SELECT 1 FROM e2e_verification.revisions b WHERE b.page_id=r.page_id AND b.id=r.id);
+DROP SCHEMA e2e_verification CASCADE;
+SQL
+  # Once the baseline is captured, a second startup must preserve history and
+  # pointers too. Nothing is excluded from this full row fingerprint.
+  local stable_before stable_after
+  stable_before=$(docker exec "$postgres_container" psql -X -U leafwiki -d leafwiki -At -v ON_ERROR_STOP=1 \
+    -c "SELECT md5(jsonb_agg(to_jsonb(p) ORDER BY id)::text) FROM pages p" \
+    -c "SELECT md5(jsonb_agg(to_jsonb(r) ORDER BY page_id,id)::text) FROM revisions r")
+  docker restart wiki-e2e-tests >/dev/null
+  wait_until_reachable
+  stable_after=$(docker exec "$postgres_container" psql -X -U leafwiki -d leafwiki -At -v ON_ERROR_STOP=1 \
+    -c "SELECT md5(jsonb_agg(to_jsonb(p) ORDER BY id)::text) FROM pages p" \
+    -c "SELECT md5(jsonb_agg(to_jsonb(r) ORDER BY page_id,id)::text) FROM revisions r")
+  [ "$stable_before" = "$stable_after" ] || { echo "Second startup changed canonical history" >&2; return 1; }
+  [ "$before" = "$(canonical_fingerprint)" ] || { echo "Second startup changed canonical data" >&2; return 1; }
+  local sqlite_files
+  sqlite_files=$(docker exec wiki-e2e-tests find /app/data -type f -name '*.db*')
+  [ -z "$sqlite_files" ] || { echo "Normal runtime created SQLite files" >&2; return 1; }
+  echo "Fresh PostgreSQL/app restart, reconnect, canonical persistence, no SQLite files: PASS"
+}
 
 wait_until_reachable
 run_playwright_tests "$@"
+verify_docker_persistence

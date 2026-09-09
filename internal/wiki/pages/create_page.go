@@ -46,7 +46,20 @@ func NewCreatePageUseCase(
 }
 
 // Execute validates input, creates the page node, and fires post-save side effects.
-func (uc *CreatePageUseCase) Execute(_ context.Context, in CreatePageInput) (out *CreatePageOutput, err error) {
+func (uc *CreatePageUseCase) Execute(ctx context.Context, in CreatePageInput) (out *CreatePageOutput, err error) {
+	if uc.tree.UsesPostgres() {
+		var result *CreatePageOutput
+		err := uc.orchestrator.Transact(ctx, uc.tree, func(local *tree.TreeService, o *pagesave.PageSaveOrchestrator) error {
+			copy := *uc
+			copy.tree = local
+			copy.orchestrator = o
+			var err error
+			result, err = copy.Execute(ctx, in)
+			return err
+		})
+		return result, err
+	}
+
 	started := time.Now()
 	defer func() {
 		uc.metrics.ObservePageSaveWorkflow(string(pagesave.PageOperationCreate), err, started)

@@ -46,7 +46,17 @@ func NewDeletePageUseCase(
 }
 
 // Execute deletes the page, cleaning up links (via orchestrator), assets, and revision data.
-func (uc *DeletePageUseCase) Execute(_ context.Context, in DeletePageInput) (err error) {
+func (uc *DeletePageUseCase) Execute(ctx context.Context, in DeletePageInput) (err error) {
+	if uc.tree.UsesPostgres() {
+		return uc.orchestrator.Transact(ctx, uc.tree, func(local *tree.TreeService, o *pagesave.PageSaveOrchestrator) error {
+			copy := *uc
+			copy.tree = local
+			copy.orchestrator = o
+			copy.revision = uc.revision.Bind(local)
+			return copy.Execute(ctx, in)
+		})
+	}
+
 	started := time.Now()
 	defer func() {
 		uc.metrics.ObservePageSaveWorkflow(string(pagesave.PageOperationDelete), err, started)
@@ -101,14 +111,16 @@ func (uc *DeletePageUseCase) Execute(_ context.Context, in DeletePageInput) (err
 			AffectedPages: affectedPages,
 		})
 
-		for _, p := range affectedPages {
-			if err := uc.assets.DeleteAllAssetsForPage(p.PageNode); err != nil {
-				uc.log.Warn("failed to delete assets for page", "pageID", p.ID, "error", err)
+		uc.orchestrator.AfterCommit(func() {
+			for _, p := range affectedPages {
+				if err := uc.assets.DeleteAllAssetsForPage(p.PageNode); err != nil {
+					uc.log.Warn("failed to delete assets for page", "pageID", p.ID, "error", err)
+				}
+				if err := uc.favorites.DeleteAllForPage(p.ID); err != nil {
+					uc.log.Warn("failed to delete favorites for page", "pageID", p.ID, "error", err)
+				}
 			}
-			if err := uc.favorites.DeleteAllForPage(p.ID); err != nil {
-				uc.log.Warn("failed to delete favorites for page", "pageID", p.ID, "error", err)
-			}
-		}
+		})
 
 		return deleteRevisionData(uc.revision, subtreeIDs)
 	}
@@ -128,12 +140,14 @@ func (uc *DeletePageUseCase) Execute(_ context.Context, in DeletePageInput) (err
 		AffectedPages: []*tree.Page{page},
 	})
 
-	if err := uc.assets.DeleteAllAssetsForPage(page.PageNode); err != nil {
-		uc.log.Warn("failed to delete assets for page", "pageID", page.ID, "error", err)
-	}
-	if err := uc.favorites.DeleteAllForPage(page.ID); err != nil {
-		uc.log.Warn("failed to delete favorites for page", "pageID", page.ID, "error", err)
-	}
+	uc.orchestrator.AfterCommit(func() {
+		if err := uc.assets.DeleteAllAssetsForPage(page.PageNode); err != nil {
+			uc.log.Warn("failed to delete assets for page", "pageID", page.ID, "error", err)
+		}
+		if err := uc.favorites.DeleteAllForPage(page.ID); err != nil {
+			uc.log.Warn("failed to delete favorites for page", "pageID", page.ID, "error", err)
+		}
+	})
 
 	return deleteRevisionData(uc.revision, []string{in.ID})
 }

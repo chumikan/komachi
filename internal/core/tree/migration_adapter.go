@@ -163,7 +163,7 @@ func (t *TreeService) migrationDependencies() treemigration.Dependencies {
 
 	return treemigration.Dependencies{
 		Root:                 root,
-		Store:                &migrationStoreAdapter{store: t.store},
+		Store:                &migrationStoreAdapter{store: t.store.(*NodeStore)}, // legacy-only path
 		Log:                  t.log,
 		CurrentSchemaVersion: CurrentSchemaVersion,
 		SaveTree:             t.persistLegacyTreeSnapshotLocked,

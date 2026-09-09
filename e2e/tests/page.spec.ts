@@ -3409,13 +3409,16 @@ Paragraph outside the list.
   test('search-panel-renders-tag-accordion-only-when-tags-exist', async ({ page }) => {
     const viewPage = new ViewPage(page);
     await viewPage.goto('/');
+    const tagsLoaded = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === '/api/tags' && response.status() === 200,
+    );
     await viewPage.switchToSearchTab();
+    const tags = (await (await tagsLoaded).json()) as unknown[];
 
     const searchView = new SearchView(page);
     const accordion = searchView.getTagAccordion();
-    const accordionCount = await accordion.count();
 
-    if (accordionCount === 0) {
+    if (tags.length === 0) {
       await expect(accordion).toHaveCount(0);
       return;
     }

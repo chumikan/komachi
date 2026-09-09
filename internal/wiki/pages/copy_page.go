@@ -46,7 +46,20 @@ func NewCopyPageUseCase(
 }
 
 // Execute copies the source page to a new node with duplicated assets.
-func (uc *CopyPageUseCase) Execute(_ context.Context, in CopyPageInput) (*CopyPageOutput, error) {
+func (uc *CopyPageUseCase) Execute(ctx context.Context, in CopyPageInput) (*CopyPageOutput, error) {
+	if uc.tree.UsesPostgres() {
+		var result *CopyPageOutput
+		err := uc.orchestrator.Transact(ctx, uc.tree, func(local *tree.TreeService, o *pagesave.PageSaveOrchestrator) error {
+			copy := *uc
+			copy.tree = local
+			copy.orchestrator = o
+			var err error
+			result, err = copy.Execute(ctx, in)
+			return err
+		})
+		return result, err
+	}
+
 	ve := sharederrors.NewValidationErrors()
 	if in.Title == "" {
 		ve.Add("title", "Title must not be empty")

@@ -57,7 +57,7 @@ func (b *LinkService) IndexAllPagesContext(ctx context.Context) error {
 			return errs[i]
 		}
 		targets := collectTargetsFromContent(b.treeService, page.CalculatePath(), page.Content)
-		if err := b.store.AddLinks(page.ID, page.Title, targets); err != nil {
+		if err := b.store.addLinks(page.ID, page.Title, targets, &page.RawContent, pagePathPointer(page)); err != nil {
 			return err
 		}
 	}
@@ -117,6 +117,7 @@ func (b *LinkService) UpdateRewrittenLinksAndHealForPages(pages []*tree.Page, ru
 		pagePath := normalizeWikiPath(page.CalculatePath())
 		targets := rewriteResolvedTargets(pagePath, outgoingByPageID[page.ID], rules, b.treeService)
 		updates = append(updates, PageLinkUpdate{
+			SourceRaw:  &page.RawContent,
 			FromPageID: page.ID,
 			FromTitle:  page.Title,
 			ToPath:     pagePath,
@@ -253,7 +254,7 @@ func (b *LinkService) isAmbiguousWikilinkOutgoing(outgoing Outgoing) bool {
 
 func (b *LinkService) UpdateLinksForPage(page *tree.Page, content string) error {
 	targets := collectTargetsFromContent(b.treeService, page.CalculatePath(), content)
-	return b.store.AddLinks(page.ID, page.Title, targets)
+	return b.store.addLinks(page.ID, page.Title, targets, &page.RawContent, pagePathPointer(page))
 }
 
 func (b *LinkService) UpdateLinksAndHealForPages(pages []*tree.Page) error {
@@ -265,6 +266,7 @@ func (b *LinkService) UpdateLinksAndHealForPages(pages []*tree.Page) error {
 		pagePath := normalizeWikiPath(page.CalculatePath())
 		targets := collectTargetsFromContent(b.treeService, pagePath, page.Content)
 		updates = append(updates, PageLinkUpdate{
+			SourceRaw:  &page.RawContent,
 			FromPageID: page.ID,
 			FromTitle:  page.Title,
 			ToPath:     pagePath,
@@ -302,6 +304,9 @@ func (b *LinkService) MarkLinksBrokenForPrefix(prefix string) error {
 }
 
 func (b *LinkService) HealLinksForExactPath(page *tree.Page) error {
+	if b.store.pg != nil {
+		return b.store.healCurrentPage(page, false)
+	}
 	toPath := normalizeWikiPath(page.CalculatePath())
 	return b.store.HealLinksForPath(toPath, page.ID)
 }
@@ -313,6 +318,9 @@ func (b *LinkService) HealLinksForExactPath(page *tree.Page) error {
 func (b *LinkService) HealWikiLinksForPage(page *tree.Page) error {
 	if len(b.treeService.FindPagesByTitle(page.Title)) != 1 {
 		return nil
+	}
+	if b.store.pg != nil {
+		return b.store.healCurrentPage(page, true)
 	}
 	return b.store.HealWikiLinksForTitle(page.Title, page.ID)
 }
@@ -328,6 +336,13 @@ func (b *LinkService) HealWikiLinksForTitleIfUnambiguous(title string) error {
 	matches := b.treeService.FindPagesByTitle(title)
 	if len(matches) != 1 {
 		return nil
+	}
+	if b.store.pg != nil {
+		page, err := b.treeService.GetPage(matches[0].ID)
+		if err != nil {
+			return err
+		}
+		return b.store.healCurrentPage(page, true)
 	}
 	return b.store.HealWikiLinksForTitle(title, matches[0].ID)
 }
@@ -371,3 +386,5 @@ func rewriteResolvedTargets(currentPath string, outgoings []Outgoing, rules []Re
 
 	return resolveTargetLinks(treeService, currentPath, paths)
 }
+
+func pagePathPointer(page *tree.Page) *string { path := page.CalculatePath(); return &path }

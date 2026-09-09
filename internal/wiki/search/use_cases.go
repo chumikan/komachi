@@ -34,12 +34,12 @@ type SearchOutput struct {
 }
 
 type SearchUseCase struct {
-	index *coresearch.SQLiteIndex
+	index coresearch.Index
 	tags  *coretags.TagsService
 	tree  *tree.TreeService
 }
 
-func NewSearchUseCase(idx *coresearch.SQLiteIndex, tags *coretags.TagsService, tree *tree.TreeService) *SearchUseCase {
+func NewSearchUseCase(idx coresearch.Index, tags *coretags.TagsService, tree *tree.TreeService) *SearchUseCase {
 	return &SearchUseCase{index: idx, tags: tags, tree: tree}
 }
 

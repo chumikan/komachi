@@ -16,6 +16,7 @@ package publicaccess
 
 import (
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"sync"
 
 	sharederrors "github.com/perber/wiki/internal/core/shared/errors"
@@ -101,4 +102,13 @@ func (s *Service) Reload() error {
 	}
 	s.enabled = enabled
 	return nil
+}
+
+func NewPostgresSettingsManaged(pg *postgres.Store) (*Service, error) {
+	st := &store{pg: pg}
+	enabled, err := st.Load()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load public-access config: %w", err)
+	}
+	return &Service{enabled: enabled, store: st}, nil
 }

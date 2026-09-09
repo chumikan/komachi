@@ -1,6 +1,7 @@
 package revision
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -38,7 +39,7 @@ const (
 type Service struct {
 	storageDir         string
 	pages              *tree.TreeService
-	store              *FSStore
+	store              revisionRepository
 	maxRevisions       int // 0 = unlimited
 	coalesceWindow     time.Duration
 	log                *slog.Logger
@@ -88,6 +89,10 @@ func (s *Service) pruneAfterSave(pageID string) {
 // CapturePageState returns a full detached snapshot including current assets.
 // This is the "expensive" path and is mainly used for asset changes and delete.
 func (s *Service) CapturePageState(pageID string) (*RevisionState, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) (*RevisionState, error) { return local.CapturePageState(pageID) })
+	}
+
 	return s.capturePageState(pageID, true)
 }
 
@@ -99,6 +104,12 @@ func (s *Service) CapturePageState(pageID string) (*RevisionState, error) {
 //
 // Assumption: asset changes go through Upload/Rename/Delete hooks and call RecordAssetChange.
 func (s *Service) RecordContentUpdate(pageID, authorID, summary string) (*Revision, bool, error) {
+	if s.pages.UsesPostgres() {
+		return revisionWrite(s, func(local *Service) (*Revision, bool, error) {
+			return local.RecordContentUpdate(pageID, authorID, summary)
+		})
+	}
+
 	page, err := s.pages.GetPage(pageID)
 	if err != nil {
 		return nil, false, err
@@ -107,6 +118,29 @@ func (s *Service) RecordContentUpdate(pageID, authorID, summary string) (*Revisi
 }
 
 func (s *Service) RecordContentUpdates(pages []*tree.Page, authorID, summary string) []error {
+	if s.pages.UsesPostgres() {
+		errs := make([]error, len(pages))
+		for i, p := range pages {
+			if p == nil {
+				errs[i] = fmt.Errorf("page is required")
+				continue
+			}
+			_, _, errs[i] = s.RecordContentUpdate(p.ID, authorID, summary)
+		}
+		return errs
+	}
+	if _, db := s.pages.TransactionDB(); db != nil {
+		errs := make([]error, len(pages))
+		for i, p := range pages {
+			if p == nil {
+				errs[i] = fmt.Errorf("page is required")
+				continue
+			}
+			_, _, errs[i] = s.recordContentUpdateForPage(p, authorID, summary)
+		}
+		return errs
+	}
+
 	errs := make([]error, len(pages))
 	if len(pages) == 0 {
 		return errs
@@ -161,6 +195,12 @@ func (s *Service) RecordContentUpdates(pages []*tree.Page, authorID, summary str
 // This method hashes the current assets and only writes a new revision when
 // content or the asset manifest actually changed.
 func (s *Service) RecordAssetChange(pageID, authorID, summary string) (*Revision, bool, error) {
+	if s.pages.UsesPostgres() {
+		return revisionWrite(s, func(local *Service) (*Revision, bool, error) {
+			return local.RecordAssetChange(pageID, authorID, summary)
+		})
+	}
+
 	mu := s.pageWriteLock(pageID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -215,6 +255,12 @@ func (s *Service) RecordAssetChange(pageID, authorID, summary string) (*Revision
 }
 
 func (s *Service) RecordStructureChange(pageID, authorID, summary string) (*Revision, bool, error) {
+	if s.pages.UsesPostgres() {
+		return revisionWrite(s, func(local *Service) (*Revision, bool, error) {
+			return local.RecordStructureChange(pageID, authorID, summary)
+		})
+	}
+
 	mu := s.pageWriteLock(pageID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -291,18 +337,41 @@ func (s *Service) resolveAssetManifestHash(pageID string, prev *Revision) (strin
 }
 
 func (s *Service) ListRevisions(pageID string) ([]*Revision, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) ([]*Revision, error) { return local.ListRevisions(pageID) })
+	}
+
 	return s.store.ListRevisions(pageID)
 }
 
 func (s *Service) ListRevisionsPage(pageID, cursor string, limit int) ([]*Revision, string, error) {
+	if s.pages.UsesPostgres() {
+		var revs []*Revision
+		var next string
+		e := s.pages.ReadTransaction(context.Background(), func(p *tree.TreeService) error {
+			var e error
+			revs, next, e = s.Bind(p).ListRevisionsPage(pageID, cursor, limit)
+			return e
+		})
+		return revs, next, e
+	}
+
 	return s.store.ListRevisionsPage(pageID, cursor, limit)
 }
 
 func (s *Service) GetLatestRevision(pageID string) (*Revision, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) (*Revision, error) { return local.GetLatestRevision(pageID) })
+	}
+
 	return s.store.GetLatestRevision(pageID)
 }
 
 func (s *Service) GetRevisionSnapshot(pageID, revisionID string) (*RevisionSnapshot, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) (*RevisionSnapshot, error) { return local.GetRevisionSnapshot(pageID, revisionID) })
+	}
+
 	rev, err := s.store.GetRevision(pageID, revisionID)
 	if err != nil {
 		return nil, err
@@ -340,6 +409,12 @@ func (s *Service) GetRevisionSnapshot(pageID, revisionID string) (*RevisionSnaps
 }
 
 func (s *Service) CompareRevisionSnapshots(pageID, baseRevisionID, targetRevisionID string) (*RevisionComparison, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) (*RevisionComparison, error) {
+			return local.CompareRevisionSnapshots(pageID, baseRevisionID, targetRevisionID)
+		})
+	}
+
 	base, err := s.GetRevisionSnapshot(pageID, baseRevisionID)
 	if err != nil {
 		return nil, err
@@ -357,6 +432,12 @@ func (s *Service) CompareRevisionSnapshots(pageID, baseRevisionID, targetRevisio
 }
 
 func (s *Service) GetRevisionAsset(pageID, revisionID, assetName string) (*RevisionAssetContent, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) (*RevisionAssetContent, error) {
+			return local.GetRevisionAsset(pageID, revisionID, assetName)
+		})
+	}
+
 	assetName = strings.TrimSpace(strings.TrimPrefix(assetName, "/"))
 	if assetName == "" {
 		return nil, sharederrors.NewLocalizedError(
@@ -451,6 +532,10 @@ func compareRevisionAssets(baseAssets, targetAssets []AssetRef) []RevisionAssetD
 }
 
 func (s *Service) DeletePageData(pageID string) error {
+	if s.pages.UsesPostgres() {
+		return s.pages.Transact(context.Background(), func(p *tree.TreeService) error { return s.Bind(p).DeletePageData(pageID) })
+	}
+
 	pageID = strings.TrimSpace(pageID)
 	if pageID == "" {
 		return nil
@@ -465,6 +550,10 @@ func (s *Service) DeletePageData(pageID string) error {
 }
 
 func (s *Service) CheckRevisionIntegrity(pageID string) ([]RevisionIntegrityIssue, error) {
+	if s.pages.UsesPostgres() {
+		return revisionRead(s, func(local *Service) ([]RevisionIntegrityIssue, error) { return local.CheckRevisionIntegrity(pageID) })
+	}
+
 	revisions, err := s.store.ListRevisions(pageID)
 	if err != nil {
 		return nil, err
@@ -515,6 +604,10 @@ func (s *Service) CheckRevisionIntegrity(pageID string) ([]RevisionIntegrityIssu
 }
 
 func (s *Service) RestoreRevision(pageID, revisionID, authorID string) error {
+	if s.pages.UsesPostgres() {
+		return s.pages.Transact(context.Background(), func(p *tree.TreeService) error { return s.Bind(p).RestoreRevision(pageID, revisionID, authorID) })
+	}
+
 	pageID = strings.TrimSpace(pageID)
 	revisionID = strings.TrimSpace(revisionID)
 	if pageID == "" {

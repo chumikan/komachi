@@ -64,6 +64,10 @@ func (s *UserService) checkEditorLimit(role string) error {
 }
 
 func (s *UserService) InitDefaultAdmin(username, email, newPassword string) error {
+	if s.store.pg != nil && s.store.tx == nil {
+		return s.postgresTransaction(func(local *UserService) error { return local.InitDefaultAdmin(username, email, newPassword) })
+	}
+
 	// Check if admin user already exists
 
 	if _, err := s.store.GetAdminUser(); err == nil {
@@ -95,6 +99,16 @@ func defaultIfEmpty(value, fallback string) string {
 }
 
 func (s *UserService) CreateUser(username, email, password, role string) (*User, error) {
+	if s.store.pg != nil && s.store.tx == nil {
+		var out *User
+		err := s.postgresTransaction(func(local *UserService) error {
+			var err error
+			out, err = local.CreateUser(username, email, password, role)
+			return err
+		})
+		return out, err
+	}
+
 	// Check if user already exists
 	_, err := s.store.GetUserByUsername(username)
 	if err == nil {
@@ -169,6 +183,16 @@ func (s *UserService) GetUserByID(id string) (*User, error) {
 }
 
 func (s *UserService) UpdateUser(id, username, email, password, role string) (*User, error) {
+	if s.store.pg != nil && s.store.tx == nil {
+		var out *User
+		err := s.postgresTransaction(func(local *UserService) error {
+			var err error
+			out, err = local.UpdateUser(id, username, email, password, role)
+			return err
+		})
+		return out, err
+	}
+
 	// Check if user exists
 	user, err := s.store.GetUserByID(id)
 	if err != nil {
@@ -285,6 +309,10 @@ func (s *UserService) DoesIDAndPasswordMatch(id, password string) (*User, error)
 }
 
 func (s *UserService) DeleteUser(id string) error {
+	if s.store.pg != nil && s.store.tx == nil {
+		return s.postgresTransaction(func(local *UserService) error { return local.DeleteUser(id) })
+	}
+
 	// Check if user exists
 	user, err := s.store.GetUserByID(id)
 	if err != nil {
@@ -480,6 +508,16 @@ func (s *UserService) ResetAdminUserPassword(username, email string) (*User, err
 // (listable, assignable API keys, etc.) but cannot meaningfully log in until
 // CompleteInvite sets a real password.
 func (s *UserService) InviteUser(username, email, role string) (*User, error) {
+	if s.store.pg != nil && s.store.tx == nil {
+		var out *User
+		err := s.postgresTransaction(func(local *UserService) error {
+			var err error
+			out, err = local.InviteUser(username, email, role)
+			return err
+		})
+		return out, err
+	}
+
 	password, err := shared.GenerateRandomPassword(32)
 	if err != nil {
 		return nil, err
@@ -502,6 +540,10 @@ func (s *UserService) InviteUser(username, email, role string) (*User, error) {
 // CompleteInvite sets id's real password and clears MustSetPassword. Called
 // once an invite token is confirmed (see auth.EmailTokenService.ConfirmInvite).
 func (s *UserService) CompleteInvite(id, password string) error {
+	if s.store.pg != nil && s.store.tx == nil {
+		return s.postgresTransaction(func(local *UserService) error { return local.CompleteInvite(id, password) })
+	}
+
 	if err := s.UpdatePassword(id, password); err != nil {
 		return err
 	}

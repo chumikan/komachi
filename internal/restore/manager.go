@@ -78,6 +78,9 @@ func NewManager(cfg Config) *Manager {
 // or ErrRestoreNeedsIntervention if a previous restore left the instance in
 // a state where a new one must not be started (see ErrRestoreNeedsIntervention).
 func (m *Manager) TriggerRestore(id string) error {
+	if m.cfg.Database == nil && m.cfg.Favorites != nil && m.cfg.Favorites.UsesPostgres() {
+		return fmt.Errorf("legacy workspace restore does not restore PostgreSQL data; PostgreSQL restore support is pending")
+	}
 	if m.job.Status().NeedsIntervention {
 		return ErrRestoreNeedsIntervention
 	}
@@ -102,6 +105,9 @@ func (m *Manager) TriggerRestore(id string) error {
 // the HTTP handler, since the actual restore then runs in a background
 // goroutine after the handler (and its response) has already completed.
 func (m *Manager) TriggerRestoreFromUpload(r io.Reader) error {
+	if m.cfg.Database == nil && m.cfg.Favorites != nil && m.cfg.Favorites.UsesPostgres() {
+		return fmt.Errorf("legacy workspace restore does not restore PostgreSQL data; PostgreSQL restore support is pending")
+	}
 	if m.job.Status().NeedsIntervention {
 		return ErrRestoreNeedsIntervention
 	}
@@ -235,6 +241,10 @@ func (m *Manager) runGuarded(fn func()) {
 // input) and coreshared.UnrestrictedExtractionLimits for the by-id path
 // (the server's own snapshot).
 func (m *Manager) runFromZipPath(zipPath string, limits coreshared.ExtractionLimits) {
+	if m.cfg.Database != nil {
+		m.runPostgres(zipPath, limits)
+		return
+	}
 	m.job.SetPhase(PhaseValidating)
 	stagingDir, meta, err := extractAndValidateWithLimits(zipPath, m.cfg.DataDir, limits)
 	if err != nil {

@@ -227,12 +227,14 @@ func (s *SQLiteIndex) Close() error {
 
 // IndexPageInput bundles one page's worth of IndexPages input.
 type IndexPageInput struct {
-	Path     string
-	FilePath string
-	PageID   string
-	Title    string
-	Kind     tree.NodeKind
-	Raw      string
+	// CurrentPage validates application callbacks against canonical PostgreSQL data.
+	CurrentPage bool
+	Path        string
+	FilePath    string
+	PageID      string
+	Title       string
+	Kind        tree.NodeKind
+	Raw         string
 }
 
 // IndexFailure pairs a failed input with why it failed, returned by

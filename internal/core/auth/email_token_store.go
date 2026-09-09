@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -56,6 +57,8 @@ type EmailToken struct {
 // suspend/replace machinery (these tokens are ephemeral and fine to lose on
 // a restore, exactly like sessions.db already is).
 type EmailTokenStore struct {
+	pg         *postgres.Store
+	tx         *sql.Tx
 	mu         sync.Mutex
 	storageDir string
 	filename   string
@@ -118,6 +121,9 @@ func (s *EmailTokenStore) withDB(fn func(db *sql.DB) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.db == nil && s.pg != nil {
+		s.db = s.pg.SQLDB()
+	}
 	if s.db == nil {
 		db, err := sql.Open("sqlite", emailTokenDatabasePath(s.storageDir, s.filename)+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 		if err != nil {
@@ -130,7 +136,7 @@ func (s *EmailTokenStore) withDB(fn func(db *sql.DB) error) error {
 }
 
 func (s *EmailTokenStore) ensureSchema() error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			CREATE TABLE IF NOT EXISTS email_tokens (
 				id TEXT PRIMARY KEY,
@@ -180,10 +186,10 @@ func (s *EmailTokenStore) Issue(userID, purpose string, ttl time.Duration) (rawT
 	hash := hashSecret(secret)
 
 	now := time.Now()
-	err = s.withDB(func(db *sql.DB) error {
+	err = s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			INSERT INTO email_tokens (id, token_hash, user_id, purpose, created_at, expires_at, consumed_at)
-			VALUES (?, ?, ?, ?, ?, ?, NULL);
+			VALUES ($1, $2, $3, $4, $5, $6, NULL);
 		`, id, hash, userID, purpose, now.Unix(), now.Add(ttl).Unix())
 		return err
 	})
@@ -242,9 +248,9 @@ func (s *EmailTokenStore) Resolve(rawToken, purpose string) (*EmailToken, error)
 // concurrent requests racing to consume the same token can't both succeed.
 func (s *EmailTokenStore) Consume(id string) error {
 	var rowsAffected int64
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		result, err := db.Exec(`
-			UPDATE email_tokens SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL;
+			UPDATE email_tokens SET consumed_at = $1 WHERE id = $2 AND consumed_at IS NULL;
 		`, time.Now().Unix(), id)
 		if err != nil {
 			return err
@@ -264,20 +270,20 @@ func (s *EmailTokenStore) Consume(id string) error {
 // CleanupExpired purges expired token rows regardless of consumed state.
 func (s *EmailTokenStore) CleanupExpired() error {
 	now := time.Now()
-	return s.withDB(func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM email_tokens WHERE expires_at <= ?;`, now.Unix())
+	return s.withQueries(func(db postgres.SQLQueries) error {
+		_, err := db.Exec(`DELETE FROM email_tokens WHERE expires_at <= $1;`, now.Unix())
 		return err
 	})
 }
 
 func (s *EmailTokenStore) getByID(id string) (*EmailToken, error) {
 	tok := &EmailToken{}
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		var createdAt, expiresAt int64
 		var consumedAt sql.NullInt64
 		err := db.QueryRow(`
 			SELECT id, token_hash, user_id, purpose, created_at, expires_at, consumed_at
-			FROM email_tokens WHERE id = ?;
+			FROM email_tokens WHERE id = $1;
 		`, id).Scan(&tok.ID, &tok.tokenHash, &tok.UserID, &tok.Purpose, &createdAt, &expiresAt, &consumedAt)
 		if err != nil {
 			return err
@@ -303,4 +309,11 @@ func parseEmailToken(raw string) (id, secret string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
+}
+
+func (s *EmailTokenStore) withQueries(fn func(postgres.SQLQueries) error) error {
+	if s.tx != nil {
+		return fn(s.tx)
+	}
+	return s.withDB(func(db *sql.DB) error { return fn(db) })
 }

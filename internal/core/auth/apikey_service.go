@@ -98,7 +98,16 @@ func (s *APIKeyService) PauseForSwap() error {
 // pre-existing-but-older api_keys.db up to the current schema. Mirrors
 // AuthService.ReplaceUserStore.
 func (s *APIKeyService) Replace(storageDir string) error {
-	newStore, err := NewAPIKeyStore(storageDir)
+	var newStore *APIKeyStore
+	var err error
+	s.mu.RLock()
+	pg := s.store.pg
+	s.mu.RUnlock()
+	if pg != nil {
+		newStore = NewPostgresAPIKeyStore(pg)
+	} else {
+		newStore, err = NewAPIKeyStore(storageDir)
+	}
 	if err != nil {
 		return err
 	}

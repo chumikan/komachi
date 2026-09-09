@@ -43,7 +43,20 @@ func NewEnsurePathUseCase(
 }
 
 // Execute ensures the path exists and returns the final node.
-func (uc *EnsurePathUseCase) Execute(_ context.Context, in EnsurePathInput) (*EnsurePathOutput, error) {
+func (uc *EnsurePathUseCase) Execute(ctx context.Context, in EnsurePathInput) (*EnsurePathOutput, error) {
+	if uc.tree.UsesPostgres() {
+		var result *EnsurePathOutput
+		err := uc.orchestrator.Transact(ctx, uc.tree, func(local *tree.TreeService, o *pagesave.PageSaveOrchestrator) error {
+			copy := *uc
+			copy.tree = local
+			copy.orchestrator = o
+			var err error
+			result, err = copy.Execute(ctx, in)
+			return err
+		})
+		return result, err
+	}
+
 	ve := sharederrors.NewValidationErrors()
 
 	cleanPath := strings.Trim(strings.TrimSpace(in.TargetPath), "/")

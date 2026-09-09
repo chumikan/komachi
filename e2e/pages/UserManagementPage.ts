@@ -1,4 +1,4 @@
-import { Page } from '@playwright/test';
+import { expect, Page } from '@playwright/test';
 import { toAppPath } from './appPath';
 
 export default class UserManagementPage {
@@ -19,7 +19,15 @@ export default class UserManagementPage {
     await dialog.locator('input[name="email"]').fill(email);
     await dialog.locator('input[name="new-password"]').fill(password);
 
-    await dialog.locator('button[data-testid="user-form-dialog-button-confirm"]').click();
+    const [response] = await Promise.all([
+      this.page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/users' &&
+          response.request().method() === 'POST',
+      ),
+      dialog.locator('button[data-testid="user-form-dialog-button-confirm"]').click(),
+    ]);
+    expect(response.ok(), 'create user API must succeed').toBeTruthy();
     await dialog.waitFor({ state: 'detached' });
   }
 

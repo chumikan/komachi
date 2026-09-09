@@ -2,6 +2,7 @@ package branding
 
 import (
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -27,7 +28,14 @@ type BrandingService struct {
 
 // NewBrandingService creates a new branding service
 func NewBrandingService(storageDir string) (*BrandingService, error) {
-	store := NewBrandingStore(storageDir)
+	return newBrandingService(NewBrandingStore(storageDir))
+}
+
+func NewPostgresBrandingService(storageDir string, pg *postgres.Store) (*BrandingService, error) {
+	return newBrandingService(&BrandingStore{storageDir: storageDir, pg: pg})
+}
+
+func newBrandingService(store *BrandingStore) (*BrandingService, error) {
 
 	// Ensure branding assets directory exists
 	assetsDir := store.brandingAssetsDir()

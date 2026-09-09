@@ -29,7 +29,16 @@ func NewConvertPageUseCase(t *tree.TreeService, r *revision.Service, log *slog.L
 }
 
 // Execute converts the node kind and records a structure revision.
-func (uc *ConvertPageUseCase) Execute(_ context.Context, in ConvertPageInput) error {
+func (uc *ConvertPageUseCase) Execute(ctx context.Context, in ConvertPageInput) error {
+	if uc.tree.UsesPostgres() {
+		return uc.tree.Transact(ctx, func(local *tree.TreeService) error {
+			copy := *uc
+			copy.tree = local
+			copy.revision = uc.revision.Bind(local)
+			return copy.Execute(ctx, in)
+		})
+	}
+
 	if in.ID == "root" || in.ID == "" {
 		return newPageRootOperationError("convert")
 	}
@@ -39,6 +48,9 @@ func (uc *ConvertPageUseCase) Execute(_ context.Context, in ConvertPageInput) er
 	}
 	if uc.revision != nil {
 		if _, _, err := uc.revision.RecordStructureChange(in.ID, in.UserID, ""); err != nil {
+			if _, db := uc.tree.TransactionDB(); db != nil {
+				return err
+			}
 			uc.log.Warn("failed to record structure revision", "pageID", in.ID, "error", err)
 		}
 	}

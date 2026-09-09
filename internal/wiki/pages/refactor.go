@@ -581,7 +581,7 @@ func (uc *ApplyPageRefactorUseCase) rewriteAffectedPages(userID string, affected
 		return nil
 	}
 
-	errs := uc.tree.BulkUpdateContent(userID, bulk)
+	errs := uc.updateContentWithHistory(userID, bulk)
 	updatedPages := make([]*tree.Page, 0, len(items))
 
 	for i, item := range items {
@@ -595,7 +595,7 @@ func (uc *ApplyPageRefactorUseCase) rewriteAffectedPages(userID string, affected
 		})
 	}
 
-	if uc.revision != nil {
+	if uc.revision != nil && !uc.tree.UsesPostgres() {
 		revErrs := uc.revision.RecordContentUpdates(updatedPages, userID, "")
 		for i, err := range revErrs {
 			if err != nil {
@@ -684,7 +684,7 @@ func (uc *ApplyPageRefactorUseCase) rewritePathChangedSubtree(userID string, sna
 		return nil
 	}
 
-	errs := uc.tree.BulkUpdateContent(userID, bulk)
+	errs := uc.updateContentWithHistory(userID, bulk)
 	updatedPages := make([]*tree.Page, 0, len(items))
 
 	for i, item := range items {
@@ -698,7 +698,7 @@ func (uc *ApplyPageRefactorUseCase) rewritePathChangedSubtree(userID string, sna
 		})
 	}
 
-	if uc.revision != nil {
+	if uc.revision != nil && !uc.tree.UsesPostgres() {
 		revErrs := uc.revision.RecordContentUpdates(updatedPages, userID, "")
 		for i, err := range revErrs {
 			if err != nil {
@@ -811,4 +811,26 @@ func collectPreviewWarnings(pages []RefactorAffectedPage) []string {
 func kindPage() *tree.NodeKind {
 	k := tree.NodeKindPage
 	return &k
+}
+
+// Keep the existing per-page best-effort refactor behavior, while committing
+// each rewritten page and its history together.
+func (uc *ApplyPageRefactorUseCase) updateContentWithHistory(userID string, updates []tree.BulkContentUpdate) []error {
+	if !uc.tree.UsesPostgres() {
+		return uc.tree.BulkUpdateContent(userID, updates)
+	}
+	errs := make([]error, len(updates))
+	for i, update := range updates {
+		errs[i] = uc.tree.Transact(context.Background(), func(local *tree.TreeService) error {
+			if err := local.BulkUpdateContent(userID, []tree.BulkContentUpdate{update})[0]; err != nil {
+				return err
+			}
+			if uc.revision != nil {
+				_, _, err := uc.revision.Bind(local).RecordContentUpdate(update.ID, userID, "")
+				return err
+			}
+			return nil
+		})
+	}
+	return errs
 }

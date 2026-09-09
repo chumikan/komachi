@@ -12,10 +12,19 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/perber/wiki/internal/storage/postgres"
+	"github.com/perber/wiki/internal/transfer"
+
 	_ "modernc.org/sqlite" // Import SQLite driver
 )
 
 type Config struct {
+	Database           *postgres.Store
+	DatabaseURL        string
+	DataDir            string
+	Freeze             func(context.Context) (func(), error)
+	PGTools            transfer.PGTools
+	Postgres           bool // Legacy ZIP snapshots cannot include PostgreSQL credentials/pages.
 	BackupsDir         string
 	RootDir            string
 	AssetsDir          string
@@ -45,6 +54,9 @@ type backupMeta struct {
 
 // createSnapshot builds the ZIP and sidecar JSON, returns the snapshot ID.
 func createSnapshot(ctx context.Context, cfg Config) (string, error) {
+	if cfg.Postgres {
+		return createPostgresSnapshot(ctx, cfg)
+	}
 	if err := os.MkdirAll(cfg.BackupsDir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create backups directory: %w", err)
 	}

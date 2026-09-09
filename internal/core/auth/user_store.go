@@ -3,7 +3,9 @@ package auth
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,8 @@ import (
 const logCloseRowsFailed = "could not close rows"
 
 type UserStore struct {
+	pg         *postgres.Store
+	tx         *sql.Tx
 	mu         sync.Mutex
 	storageDir string
 	filename   string
@@ -64,6 +68,10 @@ func (f *UserStore) Connect() error {
 	if f.db != nil {
 		return nil
 	}
+	if f.pg != nil {
+		f.db = f.pg.SQLDB()
+		return nil
+	}
 	// busy_timeout makes concurrent writers (e.g. two requests racing to
 	// consume the same TOTP recovery code via ConsumeRecoveryCodeHash) block
 	// and retry internally for up to 5s instead of failing immediately with
@@ -97,6 +105,9 @@ func (f *UserStore) Connect() error {
 // this *UserStore instance — restore always continues with a brand new one
 // afterward (see AuthService.ReplaceUserStore), so there's no un-suspend.
 func (f *UserStore) suspend() error {
+	if f.pg != nil {
+		return errors.New("legacy workspace restore cannot replace PostgreSQL authentication")
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.suspended = true
@@ -116,7 +127,7 @@ func (f *UserStore) ensureSchema() error {
 	// Create the users table if it doesn't exist. Fresh installs get the full
 	// TOTP schema immediately; existing users.db files are migrated additively
 	// by ensureTOTPColumns below.
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		CREATE TABLE IF NOT EXISTS users (
 			id TEXT PRIMARY KEY,
 			username TEXT NOT NULL UNIQUE,
@@ -152,7 +163,7 @@ func (f *UserStore) ensureMustSetPasswordColumn() error {
 	if existing["must_set_password"] {
 		return nil
 	}
-	if _, err := f.db.Exec(`ALTER TABLE users ADD COLUMN must_set_password INTEGER NOT NULL DEFAULT 0`); err != nil {
+	if _, err := f.queries().Exec(`ALTER TABLE users ADD COLUMN must_set_password INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("failed to add column must_set_password to users table: %w", err)
 	}
 	return nil
@@ -184,7 +195,7 @@ func (f *UserStore) ensureTOTPColumns() error {
 		if existing[m.column] {
 			continue
 		}
-		if _, err := f.db.Exec(m.ddl); err != nil {
+		if _, err := f.queries().Exec(m.ddl); err != nil {
 			return fmt.Errorf("failed to add column %s to users table: %w", m.column, err)
 		}
 	}
@@ -192,7 +203,7 @@ func (f *UserStore) ensureTOTPColumns() error {
 }
 
 func (f *UserStore) existingColumns() (map[string]bool, error) {
-	rows, err := f.db.Query(`PRAGMA table_info(users)`)
+	rows, err := f.queries().Query(`PRAGMA table_info(users)`)
 	if err != nil {
 		return nil, err
 	}
@@ -235,9 +246,9 @@ func (f *UserStore) CreateUser(user *User) error {
 		return err
 	}
 	// Insert the user into the database
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		INSERT INTO users (id, username, password, email, role)
-		VALUES (?, ?, ?, ?, ?);
+		VALUES ($1, $2, $3, $4, $5);
 	`, user.ID, user.Username, user.Password, user.Email, user.Role)
 	if err != nil {
 		return f.mapConstraintViolationToError(err)
@@ -298,9 +309,9 @@ func (f *UserStore) GetUserByID(id string) (*User, error) {
 	}
 
 	// Query the user by ID
-	row := f.db.QueryRow(`SELECT `+userColumns+`
+	row := f.queries().QueryRow(`SELECT `+userColumns+`
 		FROM users
-		WHERE id = ?;
+		WHERE id = $1;
 	`, id)
 
 	user, err := scanUser(row)
@@ -320,9 +331,9 @@ func (f *UserStore) GetUserByUsername(username string) (*User, error) {
 		return nil, err
 	}
 	// Query the user by username
-	row := f.db.QueryRow(`SELECT `+userColumns+`
+	row := f.queries().QueryRow(`SELECT `+userColumns+`
 		FROM users
-		WHERE username = ?;
+		WHERE username = $1;
 	`, username)
 
 	user, err := scanUser(row)
@@ -342,9 +353,9 @@ func (f *UserStore) GetUserByEmail(email string) (*User, error) {
 		return nil, err
 	}
 	// Query the user by email
-	row := f.db.QueryRow(`SELECT `+userColumns+`
+	row := f.queries().QueryRow(`SELECT `+userColumns+`
 		FROM users
-		WHERE email = ?;
+		WHERE email = $1;
 	`, email)
 
 	user, err := scanUser(row)
@@ -358,6 +369,9 @@ func (f *UserStore) GetUserByEmail(email string) (*User, error) {
 }
 
 func (f *UserStore) UpdateUser(user *User) error {
+	if f.pg != nil && f.tx == nil {
+		return NewUserService(f).postgresTransaction(func(local *UserService) error { return local.store.UpdateUser(user) })
+	}
 	// Ensure the database is connected
 	err := f.Connect()
 	if err != nil {
@@ -374,14 +388,14 @@ func (f *UserStore) UpdateUser(user *User) error {
 	}
 
 	// Update the user in the database
-	result, err := f.db.Exec(`
+	result, err := f.queries().Exec(`
 		UPDATE users
-		SET username = ?, password = ?, email = ?, role = ?
-		WHERE id = ?
+		SET username = $1, password = $2, email = $3, role = $4
+		WHERE id = $5
 		  AND NOT (
-			role = ?
-			AND ? != ?
-			AND (SELECT COUNT(*) FROM users WHERE role = ?) <= 1
+			role = $6
+			AND $7 != $8
+			AND (SELECT COUNT(*) FROM users WHERE role = $9) <= 1
 		  );
 	`, user.Username, user.Password, user.Email, user.Role, user.ID, RoleAdmin, user.Role, RoleAdmin, RoleAdmin)
 	if err != nil {
@@ -414,9 +428,9 @@ func (f *UserStore) DeleteUser(id string) error {
 	}
 
 	// Delete the user from the database
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		DELETE FROM users
-		WHERE id = ?;
+		WHERE id = $1;
 	`, id)
 	if err != nil {
 		return err
@@ -431,7 +445,7 @@ func (f *UserStore) GetAdminUser() (*User, error) {
 		return nil, err
 	}
 	// Query the admin user
-	row := f.db.QueryRow(`SELECT ` + userColumns + `
+	row := f.queries().QueryRow(`SELECT ` + userColumns + `
 		FROM users
 		WHERE role = 'admin'
 		LIMIT 1;
@@ -454,7 +468,7 @@ func (f *UserStore) GetAllUsers() ([]*User, error) {
 		return nil, err
 	}
 	// Query all users
-	rows, err := f.db.Query(`SELECT ` + userColumns + `
+	rows, err := f.queries().Query(`SELECT ` + userColumns + `
 		FROM users;
 	`)
 	if err != nil {
@@ -482,7 +496,7 @@ func (f *UserStore) CountAdminUsers() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	row := f.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin';`)
+	row := f.queries().QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin';`)
 	var count int
 	if err := row.Scan(&count); err != nil {
 		return 0, err
@@ -498,7 +512,7 @@ func (f *UserStore) CountEditorUsers() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	row := f.db.QueryRow(`SELECT COUNT(*) FROM users WHERE role IN ('admin', 'editor');`)
+	row := f.queries().QueryRow(`SELECT COUNT(*) FROM users WHERE role IN ('admin', 'editor');`)
 	var count int
 	if err := row.Scan(&count); err != nil {
 		return 0, err
@@ -513,7 +527,7 @@ func (f *UserStore) GetUserCount() (int, error) {
 		return 0, err
 	}
 	// Query the user count
-	row := f.db.QueryRow(`
+	row := f.queries().QueryRow(`
 		SELECT COUNT(*)
 		FROM users;
 	`)
@@ -526,6 +540,9 @@ func (f *UserStore) GetUserCount() (int, error) {
 }
 
 func (f *UserStore) mapConstraintViolationToError(err error) error {
+	if uniqueConstraint(err, "users_username_key") || uniqueConstraint(err, "users_email_key") {
+		return ErrUserAlreadyExists
+	}
 	// Check if the error is a constraint violation
 
 	if err, ok := err.(interface{ Error() string }); ok {
@@ -559,10 +576,10 @@ func (f *UserStore) UpdatePassword(userID string, newPassword string) error {
 	}
 
 	// Update the user's password in the database
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		UPDATE users
-		SET password = ?
-		WHERE id = ?;
+		SET password = $1
+		WHERE id = $2;
 	`, newPassword, userID)
 	if err != nil {
 		return err
@@ -583,10 +600,10 @@ func (f *UserStore) SetPendingTOTPSecret(userID, encryptedSecret string) error {
 		return err
 	}
 
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		UPDATE users
-		SET totp_secret_encrypted = ?
-		WHERE id = ?;
+		SET totp_secret_encrypted = $1
+		WHERE id = $2;
 	`, encryptedSecret, userID)
 	return err
 }
@@ -608,10 +625,10 @@ func (f *UserStore) EnableTOTP(userID, encryptedSecret string, recoveryCodeHashe
 		return fmt.Errorf("failed to encode recovery codes for user %s: %w", userID, err)
 	}
 
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		UPDATE users
-		SET totp_secret_encrypted = ?, totp_enabled = 1, totp_recovery_codes_json = ?, totp_enabled_at = ?
-		WHERE id = ?;
+		SET totp_secret_encrypted = $1, totp_enabled = 1, totp_recovery_codes_json = $2, totp_enabled_at = $3
+		WHERE id = $4;
 	`, encryptedSecret, string(codesJSON), time.Now().UTC().Format(time.RFC3339), userID)
 	return err
 }
@@ -627,10 +644,10 @@ func (f *UserStore) DisableTOTP(userID string) error {
 		return err
 	}
 
-	_, err = f.db.Exec(`
+	_, err = f.queries().Exec(`
 		UPDATE users
-		SET totp_secret_encrypted = '', totp_enabled = 0, totp_recovery_codes_json = '[]', totp_last_reset_at = ?
-		WHERE id = ?;
+		SET totp_secret_encrypted = '', totp_enabled = 0, totp_recovery_codes_json = '[]', totp_last_reset_at = $1
+		WHERE id = $2;
 	`, time.Now().UTC().Format(time.RFC3339), userID)
 	return err
 }
@@ -661,10 +678,10 @@ func (f *UserStore) ConsumeRecoveryCodeHash(userID string, oldHashes, newHashes 
 		return false, fmt.Errorf("failed to encode recovery codes for user %s: %w", userID, err)
 	}
 
-	result, err := f.db.Exec(`
+	result, err := f.queries().Exec(`
 		UPDATE users
-		SET totp_recovery_codes_json = ?
-		WHERE id = ? AND totp_recovery_codes_json = ?;
+		SET totp_recovery_codes_json = $1
+		WHERE id = $2 AND totp_recovery_codes_json = $3;
 	`, string(newJSON), userID, string(oldJSON))
 	if err != nil {
 		return false, err
@@ -692,10 +709,17 @@ func (f *UserStore) SetMustSetPassword(userID string, value bool) error {
 	if value {
 		v = 1
 	}
-	_, err := f.db.Exec(`
+	_, err := f.queries().Exec(`
 		UPDATE users
-		SET must_set_password = ?
-		WHERE id = ?;
+		SET must_set_password = $1
+		WHERE id = $2;
 	`, v, userID)
 	return err
+}
+
+func (f *UserStore) queries() postgres.SQLQueries {
+	if f.tx != nil {
+		return f.tx
+	}
+	return f.db
 }

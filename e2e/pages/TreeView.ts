@@ -118,12 +118,17 @@ export default class TreeView {
   }
 
   async isSidebarVisible(): Promise<boolean> {
-    return this.treeView().isVisible();
+    // Off-canvas elements still satisfy Playwright's CSS visibility check.
+    return (
+      (await this.page.getByTestId('sidebar-toggle-button').getAttribute('aria-expanded')) ===
+      'true'
+    );
   }
 
   async getNumberOfTreeNodes() {
-    await this.page.waitForLoadState('networkidle');
     await this.ensureSidebarVisible();
+    await this.page.waitForLoadState('networkidle');
+    await this.treeView().waitFor({ state: 'visible' });
     return this.treeView().locator('a[data-testid^="tree-node-link-"]').count();
   }
 
@@ -152,6 +157,9 @@ export default class TreeView {
       const expectedPath = new URL(href, 'http://localhost').pathname;
       await expect.poll(() => new URL(this.page.url()).pathname).toBe(expectedPath);
     }
+    // Breadcrumbs use the loaded viewer page, unlike URL/aria-current.
+    // Markdown headings may intentionally differ from the page title.
+    await expect(this.page.locator('.breadcrumbs-nav__current')).toContainText(title);
     await this.page.locator('article').waitFor({ state: 'visible' });
   }
 

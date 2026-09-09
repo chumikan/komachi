@@ -23,6 +23,7 @@ import (
 	"github.com/perber/wiki/internal/links"
 	"github.com/perber/wiki/internal/properties"
 	"github.com/perber/wiki/internal/search"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"github.com/perber/wiki/internal/tags"
 	"github.com/perber/wiki/internal/usersettings"
 	wikiapikeys "github.com/perber/wiki/internal/wiki/apikeys"
@@ -48,6 +49,7 @@ import (
 )
 
 type Wiki struct {
+	pg                *postgres.Store
 	tree              *tree.TreeService
 	slug              *tree.SlugService
 	auth              *auth.AuthService
@@ -60,7 +62,7 @@ type Wiki struct {
 	asset             *assets.AssetService
 	branding          *branding.BrandingService
 	avatar            *avatar.AvatarService
-	searchIndex       *search.SQLiteIndex
+	searchIndex       search.Index
 	status            *search.IndexingStatus
 	storageDir        string
 
@@ -103,28 +105,30 @@ type Wiki struct {
 const SYSTEM_USER_ID = "system"
 
 type WikiOptions struct {
-	StorageDir              string        // Path to storage directory
-	AdminUsername           string        // Initial admin username (optional; defaults to "admin")
-	AdminEmail              string        // Initial admin email (optional; defaults to "admin@localhost")
-	AdminPassword           string        // Initial admin password
-	JWTSecret               string        // JWT secret for authentication
-	AccessTokenTimeout      time.Duration // Access token timeout duration
-	RefreshTokenTimeout     time.Duration // Refresh token timeout duration
-	AuthDisabled            bool          // Whether authentication is disabled
-	EnableRevision          bool          // Whether revision recording/storage is enabled
-	EnableAPIKeyManagement  bool          // Whether the experimental API key management feature is enabled
-	MaxRevisionHistory      int           // Max revisions kept per page; 0 = unlimited
-	EditorLimit             int           // Max admin+editor users allowed; 0 = unlimited
-	MaxAssetUploadSizeBytes int64         // Maximum allowed size in bytes for asset/import uploads; 0 = default
-	RevisionCoalesceWindow  time.Duration // Window for coalescing rapid successive saves; 0 = disabled
-	TOTPEncryptionKey       string        // Key used to encrypt per-user TOTP secrets at rest; empty disables TOTP self-service
-	SMTP                    email.Config  // SMTP config for password-reset/invite email; SMTP.Enabled()==false disables the feature entirely
+	Postgres                *postgres.Store // supplied by the application; nil is the legacy contract-test adapter
+	StorageDir              string          // Path to storage directory
+	AdminUsername           string          // Initial admin username (optional; defaults to "admin")
+	AdminEmail              string          // Initial admin email (optional; defaults to "admin@localhost")
+	AdminPassword           string          // Initial admin password
+	JWTSecret               string          // JWT secret for authentication
+	AccessTokenTimeout      time.Duration   // Access token timeout duration
+	RefreshTokenTimeout     time.Duration   // Refresh token timeout duration
+	AuthDisabled            bool            // Whether authentication is disabled
+	EnableRevision          bool            // Whether revision recording/storage is enabled
+	EnableAPIKeyManagement  bool            // Whether the experimental API key management feature is enabled
+	MaxRevisionHistory      int             // Max revisions kept per page; 0 = unlimited
+	EditorLimit             int             // Max admin+editor users allowed; 0 = unlimited
+	MaxAssetUploadSizeBytes int64           // Maximum allowed size in bytes for asset/import uploads; 0 = default
+	RevisionCoalesceWindow  time.Duration   // Window for coalescing rapid successive saves; 0 = disabled
+	TOTPEncryptionKey       string          // Key used to encrypt per-user TOTP secrets at rest; empty disables TOTP self-service
+	SMTP                    email.Config    // SMTP config for password-reset/invite email; SMTP.Enabled()==false disables the feature entirely
 	Metrics                 *httpmetrics.HTTPMetrics
 }
 
 func NewWiki(options *WikiOptions) (*Wiki, error) {
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	w := &Wiki{
+		pg:             options.Postgres,
 		storageDir:     options.StorageDir,
 		log:            slog.Default().With("component", "Wiki"),
 		resyncJob:      wikiresync.NewResyncJob(),
@@ -220,7 +224,13 @@ func (w *Wiki) ensureBaselineRevisions() {
 // ─── Subsystem initializers ───────────────────────────────────────────────────
 
 func (w *Wiki) initAuth(options *WikiOptions) error {
-	store, err := auth.NewUserStore(w.storageDir)
+	var store *auth.UserStore
+	var err error
+	if w.pg != nil {
+		store = auth.NewPostgresUserStore(w.pg)
+	} else {
+		store, err = auth.NewUserStore(w.storageDir)
+	}
 	if err != nil {
 		return err
 	}
@@ -243,7 +253,13 @@ func (w *Wiki) initAuth(options *WikiOptions) error {
 		w.totp = totpService
 	}
 	if !options.AuthDisabled {
-		sessionStore, err := auth.NewSessionStore(w.storageDir)
+		var sessionStore *auth.SessionStore
+		var err error
+		if w.pg != nil {
+			sessionStore = auth.NewPostgresSessionStore(w.pg)
+		} else {
+			sessionStore, err = auth.NewSessionStore(w.storageDir)
+		}
 		if err != nil {
 			return err
 		}
@@ -265,7 +281,13 @@ func (w *Wiki) initAuth(options *WikiOptions) error {
 		// (and the Bearer middleware/admin routes stay disabled) until an
 		// operator explicitly opts in.
 		if options.EnableAPIKeyManagement {
-			apiKeyStore, err := auth.NewAPIKeyStore(w.storageDir)
+			var apiKeyStore *auth.APIKeyStore
+			var err error
+			if w.pg != nil {
+				apiKeyStore = auth.NewPostgresAPIKeyStore(w.pg)
+			} else {
+				apiKeyStore, err = auth.NewAPIKeyStore(w.storageDir)
+			}
 			if err != nil {
 				return err
 			}
@@ -286,7 +308,13 @@ func (w *Wiki) initEmail(options *WikiOptions) error {
 		return nil
 	}
 
-	store, err := auth.NewEmailTokenStore(w.storageDir)
+	var store *auth.EmailTokenStore
+	var err error
+	if w.pg != nil {
+		store = auth.NewPostgresEmailTokenStore(w.pg)
+	} else {
+		store, err = auth.NewEmailTokenStore(w.storageDir)
+	}
 	if err != nil {
 		return err
 	}
@@ -303,6 +331,9 @@ func (w *Wiki) initCoreServices(options *WikiOptions) error {
 	w.ignoreCache = ignore.NewCache(rootDir)
 
 	w.tree = tree.NewTreeService(w.storageDir)
+	if options.Postgres != nil {
+		w.tree = tree.NewPostgresTreeService(w.storageDir, options.Postgres)
+	}
 	w.tree.SetIgnoreCache(w.ignoreCache)
 	if err := w.tree.LoadTree(); err != nil {
 		return err
@@ -315,7 +346,13 @@ func (w *Wiki) initCoreServices(options *WikiOptions) error {
 }
 
 func (w *Wiki) initLinkService() error {
-	linksStore, err := links.NewLinksStore(w.storageDir)
+	var linksStore *links.LinksStore
+	var err error
+	if w.pg != nil {
+		linksStore, err = links.NewPostgresLinksStore(w.pg)
+	} else {
+		linksStore, err = links.NewLinksStore(w.storageDir)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init links store: %w", err)
 	}
@@ -327,7 +364,13 @@ func (w *Wiki) initLinkService() error {
 }
 
 func (w *Wiki) initTagsService() error {
-	tagsStore, err := tags.NewTagsStore(w.storageDir)
+	var tagsStore *tags.TagsStore
+	var err error
+	if w.pg != nil {
+		tagsStore, err = tags.NewPostgresTagsStore(w.pg)
+	} else {
+		tagsStore, err = tags.NewTagsStore(w.storageDir)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init tags store: %w", err)
 	}
@@ -336,7 +379,13 @@ func (w *Wiki) initTagsService() error {
 }
 
 func (w *Wiki) initPropertiesService() error {
-	propsStore, err := properties.NewPropertiesStore(w.storageDir)
+	var propsStore *properties.PropertiesStore
+	var err error
+	if w.pg != nil {
+		propsStore, err = properties.NewPostgresPropertiesStore(w.pg)
+	} else {
+		propsStore, err = properties.NewPropertiesStore(w.storageDir)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init properties store: %w", err)
 	}
@@ -345,7 +394,13 @@ func (w *Wiki) initPropertiesService() error {
 }
 
 func (w *Wiki) initFavoritesService() error {
-	store, err := favorites.NewFavoritesStore(w.storageDir, w.log)
+	var store *favorites.FavoritesStore
+	var err error
+	if w.pg != nil {
+		store = favorites.NewPostgresFavoritesStore(w.pg, w.log)
+	} else {
+		store, err = favorites.NewFavoritesStore(w.storageDir, w.log)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init favorites store: %w", err)
 	}
@@ -354,7 +409,13 @@ func (w *Wiki) initFavoritesService() error {
 }
 
 func (w *Wiki) initUserSettingsService() error {
-	store, err := usersettings.NewUserSettingsStore(w.storageDir, w.log)
+	var store *usersettings.UserSettingsStore
+	var err error
+	if w.pg != nil {
+		store = usersettings.NewPostgresUserSettingsStore(w.pg, w.log)
+	} else {
+		store, err = usersettings.NewUserSettingsStore(w.storageDir, w.log)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init user settings store: %w", err)
 	}
@@ -398,7 +459,11 @@ func (w *Wiki) bootstrapTagsAndProperties() {
 
 func (w *Wiki) initSearch() error {
 	var err error
-	w.searchIndex, err = search.NewSQLiteIndex(w.storageDir)
+	if w.pg != nil {
+		w.searchIndex, err = search.NewPostgreSQLIndex(w.pg)
+	} else {
+		w.searchIndex, err = search.NewSQLiteIndex(w.storageDir)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init search index: %w", err)
 	}
@@ -423,7 +488,11 @@ func (w *Wiki) initSearch() error {
 
 func (w *Wiki) initBranding() error {
 	var err error
-	w.branding, err = branding.NewBrandingService(w.storageDir)
+	if w.pg != nil {
+		w.branding, err = branding.NewPostgresBrandingService(w.storageDir, w.pg)
+	} else {
+		w.branding, err = branding.NewBrandingService(w.storageDir)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to init branding service: %w", err)
 	}
@@ -1007,6 +1076,11 @@ func (w *Wiki) Close() error {
 	w.shutdownCancel() // signal in-flight reloads to abort
 	w.reloadWG.Wait()  // drain goroutines before closing stores
 	w.status.Finish()
+	if w.emailTokenService != nil {
+		// Pending sends still read users and issue tokens. Drain before closing
+		// any of those repositories, just as we drain reloads above.
+		w.emailTokenService.Close()
+	}
 	if w.auth != nil {
 		// When auth is enabled, AuthService owns both the session store and user store.
 		if err := w.auth.Close(); err != nil {
@@ -1024,9 +1098,6 @@ func (w *Wiki) Close() error {
 		}
 	}
 
-	if w.emailTokenService != nil {
-		w.emailTokenService.Close() // drains in-flight fire-and-forget password-reset sends
-	}
 	if w.emailTokenStore != nil {
 		if err := w.emailTokenStore.Close(); err != nil {
 			w.log.Error("error closing email token store", "error", err)
@@ -1036,6 +1107,16 @@ func (w *Wiki) Close() error {
 	if w.links != nil {
 		if err := w.links.Close(); err != nil {
 			w.log.Error("error closing links", "error", err)
+		}
+	}
+	if w.tags != nil {
+		if err := w.tags.Close(); err != nil {
+			w.log.Error("error closing tags", "error", err)
+		}
+	}
+	if w.props != nil {
+		if err := w.props.Close(); err != nil {
+			w.log.Error("error closing properties", "error", err)
 		}
 	}
 

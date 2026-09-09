@@ -9,6 +9,7 @@ import (
 
 // RevisionSideEffect records revision history entries after page mutations.
 type RevisionSideEffect struct {
+	onError func(error)
 	svc     *revision.Service
 	log     *slog.Logger
 	metrics *httpmetrics.HTTPMetrics
@@ -69,6 +70,10 @@ func (e *RevisionSideEffect) Apply(event PageSaveEvent) {
 
 func (e *RevisionSideEffect) recordContent(pageID, userID, summary string, operation PageOperationType) {
 	if _, _, err := e.svc.RecordContentUpdate(pageID, userID, summary); err != nil {
+		if e.onError != nil {
+			e.onError(err)
+			return
+		}
 		e.log.Warn("failed to record content revision", "pageID", pageID, "error", err)
 		e.metrics.IncPageSaveSideEffectFailure(string(operation), e.Name())
 	}
@@ -76,6 +81,10 @@ func (e *RevisionSideEffect) recordContent(pageID, userID, summary string, opera
 
 func (e *RevisionSideEffect) recordStructure(pageID, userID string, operation PageOperationType) {
 	if _, _, err := e.svc.RecordStructureChange(pageID, userID, ""); err != nil {
+		if e.onError != nil {
+			e.onError(err)
+			return
+		}
 		e.log.Warn("failed to record structure revision", "pageID", pageID, "error", err)
 		e.metrics.IncPageSaveSideEffectFailure(string(operation), e.Name())
 	}

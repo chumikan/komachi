@@ -15,14 +15,16 @@ import (
 	"github.com/perber/wiki/internal/core/ignore"
 	"github.com/perber/wiki/internal/core/shared"
 	"github.com/perber/wiki/internal/core/treemigration"
+	"github.com/perber/wiki/internal/storage/postgres"
 )
 
 // TreeService is our main component for handling tree operations
 // We use this service to create pages, delete pages, update pages, etc.
 type TreeService struct {
+	pg           *postgres.Store
 	storageDir   string
 	tree         *PageNode
-	store        *NodeStore
+	store        nodeRepository
 	log          *slog.Logger
 	nodesByID    map[string]*PageNode
 	nodesByTitle map[string][]*PageNode
@@ -61,6 +63,10 @@ func (t *TreeService) SetIgnoreCache(ignoreCache *ignore.Cache) {
 // LoadTree reconstructs the in-memory tree from the filesystem.
 // Legacy tree.json data is only used as a migration source for older schema versions.
 func (t *TreeService) LoadTree() error {
+	if t.pg != nil {
+		return t.ReadTransaction(context.Background(), func(*TreeService) error { return nil })
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -147,6 +153,10 @@ func (t *TreeService) withRLockedTree(fn func() error) error {
 
 // TreeHash returns the current hash of the tree
 func (t *TreeService) TreeHash() string {
+	if t.pg != nil {
+		return pgReadValue(t, func(local *TreeService) string { return local.TreeHash() })
+	}
+
 	var hash string
 	_ = t.withRLockedTree(func() error {
 		hash = t.tree.Hash()
@@ -164,6 +174,10 @@ func (t *TreeService) ReconstructTreeFromFS() error {
 }
 
 func (t *TreeService) ReconstructTreeFromFSContext(ctx context.Context) error {
+	if t.pg != nil {
+		return t.ReadTransaction(ctx, func(*TreeService) error { return nil })
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -208,6 +222,12 @@ type createNodeOptions struct {
 
 // Create Node adds a new node to the tree
 func (t *TreeService) CreateNode(userID string, parentID *string, title string, slug string, nodeKind *NodeKind) (*string, error) {
+	if t.pg != nil {
+		return pgWrite(t, func(local *TreeService) (*string, error) {
+			return local.CreateNode(userID, parentID, title, slug, nodeKind)
+		})
+	}
+
 	var result *string
 	err := t.withLockedTree(func() error {
 		created, err := t.createNodeLocked(userID, parentID, title, slug, nodeKind, createNodeOptions{})
@@ -223,6 +243,12 @@ func (t *TreeService) CreateNode(userID string, parentID *string, title string, 
 }
 
 func (t *TreeService) RestoreNode(userID, id string, parentID *string, title, slug string, nodeKind NodeKind, content string, metadata PageMetadata) (*Page, error) {
+	if t.pg != nil {
+		return pgWrite(t, func(local *TreeService) (*Page, error) {
+			return local.RestoreNode(userID, id, parentID, title, slug, nodeKind, content, metadata)
+		})
+	}
+
 	var restored *Page
 	err := t.withLockedTree(func() error {
 		kind := nodeKind
@@ -378,6 +404,9 @@ func (t *TreeService) rollbackCreatedNodeLocked(parent *PageNode, entry *PageNod
 	}
 
 	if parentWasConverted && len(parent.Children) == 0 {
+		if _, ok := t.store.(*postgresNodeStore); ok {
+			return nil
+		}
 		orderPath, err := t.store.dirPathForNode(parent)
 		if err != nil {
 			return err
@@ -399,6 +428,10 @@ func (t *TreeService) rollbackCreatedNodeLocked(parent *PageNode, entry *PageNod
 // stable across calls. Returns nil when the tree is not loaded or the title
 // is empty.
 func (t *TreeService) FindPagesByTitle(title string) []*PageNode {
+	if t.pg != nil {
+		return pgReadValue(t, func(local *TreeService) []*PageNode { return local.FindPagesByTitle(title) })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -420,6 +453,10 @@ func (t *TreeService) FindPagesByTitle(title string) []*PageNode {
 
 // FindPageByID finds a page in the tree by its ID.
 func (t *TreeService) FindPageByID(id string) (*PageNode, error) {
+	if t.pg != nil {
+		return pgRead(t, func(local *TreeService) (*PageNode, error) { return local.FindPageByID(id) })
+	}
+
 	var result *PageNode
 	err := t.withRLockedTree(func() error {
 		if t.tree == nil {
@@ -594,6 +631,10 @@ func (t *TreeService) findChildBySlugExactInParentLocked(parent *PageNode, slug 
 
 // DeleteNode deletes a node from the tree
 func (t *TreeService) DeleteNode(userID string, id string, recursive bool, expectedVersion string) error {
+	if t.pg != nil {
+		return t.Transact(context.Background(), func(local *TreeService) error { return local.DeleteNode(userID, id, recursive, expectedVersion) })
+	}
+
 	err := t.withLockedTree(func() error {
 		if t.tree == nil {
 			return ErrTreeNotLoaded
@@ -672,6 +713,12 @@ func (t *TreeService) DeleteNode(userID string, id string, recursive bool, expec
 // embedded frontmatter (UpsertContentPreservingFrontmatter).
 // When both are absent, content is a plain body update (UpsertContent).
 func (t *TreeService) UpdateNode(userID string, id string, title string, slug string, content *string, expectedVersion string, tags []string, properties map[string]string, preserveFrontmatter bool) error {
+	if t.pg != nil {
+		return t.Transact(context.Background(), func(local *TreeService) error {
+			return local.UpdateNode(userID, id, title, slug, content, expectedVersion, tags, properties, preserveFrontmatter)
+		})
+	}
+
 	return t.withLockedTree(func() error {
 		if t.tree == nil {
 			return ErrTreeNotLoaded
@@ -746,6 +793,10 @@ func (t *TreeService) UpdateNode(userID string, id string, title string, slug st
 }
 
 func (t *TreeService) ConvertNode(userID string, id string, kind NodeKind, expectedVersion string) error {
+	if t.pg != nil {
+		return t.Transact(context.Background(), func(local *TreeService) error { return local.ConvertNode(userID, id, kind, expectedVersion) })
+	}
+
 	return t.withLockedTree(func() error {
 		if t.tree == nil {
 			return ErrTreeNotLoaded
@@ -794,6 +845,10 @@ func (t *TreeService) ConvertNode(userID string, id string, kind NodeKind, expec
 
 // GetTree returns the tree
 func (t *TreeService) GetTree() *PageNode {
+	if t.pg != nil {
+		return pgReadValue(t, func(local *TreeService) *PageNode { return local.GetTree() })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -802,6 +857,10 @@ func (t *TreeService) GetTree() *PageNode {
 
 // IsLoaded reports whether the tree has been loaded into memory.
 func (t *TreeService) IsLoaded() bool {
+	if t.pg != nil {
+		return pgReadValue(t, func(local *TreeService) bool { return local.IsLoaded() })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.tree != nil
@@ -809,6 +868,10 @@ func (t *TreeService) IsLoaded() bool {
 
 // HasPages reports whether the tree contains at least one non-root node.
 func (t *TreeService) HasPages() bool {
+	if t.pg != nil {
+		return pgReadValue(t, func(local *TreeService) bool { return local.HasPages() })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.tree != nil && len(t.tree.Children) > 0
@@ -819,6 +882,11 @@ func (t *TreeService) HasPages() bool {
 // lock and allocates nothing, so it is cheap enough to call on every metrics
 // scrape. A node whose kind is unset is counted as a page.
 func (t *TreeService) NodeCounts() (pages, sections int) {
+	if t.pg != nil {
+		_ = t.ReadTransaction(context.Background(), func(local *TreeService) error { pages, sections = local.NodeCounts(); return nil })
+		return
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, node := range t.nodesByID {
@@ -836,6 +904,19 @@ func (t *TreeService) NodeCounts() (pages, sections int) {
 // is called without any lock held so it may safely call other TreeService
 // methods. Returns nil immediately when the tree is not yet loaded.
 func (t *TreeService) WalkNodes(fn func(id string) error) error {
+	if t.pg != nil {
+		ids, err := pgRead(t, func(local *TreeService) ([]string, error) { return local.collectIDsDFS(), nil })
+		if err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := fn(id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	ids := t.collectIDsDFS()
 	for _, id := range ids {
 		if err := fn(id); err != nil {
@@ -879,6 +960,32 @@ type BulkContentUpdate struct {
 // running disk writes in parallel. Returns per-item errors; nil means success.
 // Only content and metadata timestamps are updated; slug and title are unchanged.
 func (t *TreeService) BulkUpdateContent(userID string, updates []BulkContentUpdate) []error {
+	if t.pg != nil {
+		errs := make([]error, len(updates))
+		for i, u := range updates {
+			errs[i] = t.Transact(context.Background(), func(local *TreeService) error {
+				p, e := local.GetPage(u.ID)
+				if e != nil {
+					return e
+				}
+				return local.UpdateNode(userID, u.ID, p.Title, p.Slug, &u.Content, VersionUnchecked, nil, nil, false)
+			})
+		}
+		return errs
+	}
+	if _, ok := t.store.(*postgresNodeStore); ok {
+		errs := make([]error, len(updates))
+		for i, u := range updates {
+			p, e := t.GetPage(u.ID)
+			if e != nil {
+				errs[i] = e
+				continue
+			}
+			errs[i] = t.UpdateNode(userID, u.ID, p.Title, p.Slug, &u.Content, VersionUnchecked, nil, nil, false)
+		}
+		return errs
+	}
+
 	errs := make([]error, len(updates))
 	if len(updates) == 0 {
 		return errs
@@ -948,6 +1055,28 @@ func (t *TreeService) BulkUpdateContent(userID string, updates []BulkContentUpda
 // GetPages returns pages for the given IDs under a single read lock,
 // reading files in parallel. Each entry is nil when the corresponding error is non-nil.
 func (t *TreeService) GetPages(ids []string) ([]*Page, []error) {
+	if t.pg != nil {
+		var pages []*Page
+		var errs []error
+		e := t.ReadTransaction(context.Background(), func(local *TreeService) error { pages, errs = local.GetPages(ids); return nil })
+		if e != nil {
+			pages = make([]*Page, len(ids))
+			errs = make([]error, len(ids))
+			for i := range errs {
+				errs[i] = e
+			}
+		}
+		return pages, errs
+	}
+	if _, ok := t.store.(*postgresNodeStore); ok {
+		pages := make([]*Page, len(ids))
+		errs := make([]error, len(ids))
+		for i, id := range ids {
+			pages[i], errs[i] = t.GetPage(id)
+		}
+		return pages, errs
+	}
+
 	pages := make([]*Page, len(ids))
 	errs := make([]error, len(ids))
 	if len(ids) == 0 {
@@ -1006,6 +1135,10 @@ func (t *TreeService) GetPages(ids []string) ([]*Page, []error) {
 
 // GetPage returns a page by its ID
 func (t *TreeService) GetPage(id string) (*Page, error) {
+	if t.pg != nil {
+		return pgRead(t, func(local *TreeService) (*Page, error) { return local.GetPage(id) })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -1033,6 +1166,10 @@ func (t *TreeService) GetPage(id string) (*Page, error) {
 
 // ReadPageRaw returns the raw markdown of a page including frontmatter.
 func (t *TreeService) ReadPageRaw(id string) (string, error) {
+	if t.pg != nil {
+		return pgRead(t, func(local *TreeService) (string, error) { return local.ReadPageRaw(id) })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -1055,6 +1192,10 @@ func (t *TreeService) ReadPageRaw(id string) (string, error) {
 
 // ResolvePermalinkTarget resolves a stable page ID to the current route path.
 func (t *TreeService) ResolvePermalinkTarget(id string) (*PermalinkTarget, error) {
+	if t.pg != nil {
+		return pgRead(t, func(local *TreeService) (*PermalinkTarget, error) { return local.ResolvePermalinkTarget(id) })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -1076,6 +1217,10 @@ func (t *TreeService) ResolvePermalinkTarget(id string) (*PermalinkTarget, error
 
 // FindPageByRoutePath finds a page in the tree by its path.
 func (t *TreeService) FindPageByRoutePath(routePath string) (*Page, error) {
+	if t.pg != nil {
+		return pgRead(t, func(local *TreeService) (*Page, error) { return local.FindPageByRoutePath(routePath) })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -1118,6 +1263,10 @@ func (t *TreeService) FindPageByRoutePath(routePath string) (*Page, error) {
 // LookupPagePath looks up a path in the tree and returns a PathLookup struct
 // that contains information about the path and its segments and whether they exist.
 func (t *TreeService) LookupPagePath(p string) (*PathLookup, error) {
+	if t.pg != nil {
+		return pgRead(t, func(local *TreeService) (*PathLookup, error) { return local.LookupPagePath(p) })
+	}
+
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -1226,6 +1375,12 @@ func (t *TreeService) lookupPagePathLocked(p string) (*PathLookup, error) {
 // It creates any missing segments as needed
 // Returns the final page node and a list of created nodes
 func (t *TreeService) EnsurePagePath(userID string, p string, targetTitle string, kind *NodeKind) (*EnsurePathResult, error) {
+	if t.pg != nil {
+		return pgWrite(t, func(local *TreeService) (*EnsurePathResult, error) {
+			return local.EnsurePagePath(userID, p, targetTitle, kind)
+		})
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -1311,6 +1466,12 @@ func (t *TreeService) MoveNode(userID string, id string, parentID string, expect
 // and inserts it at the given index among the new parent's children.
 // A negative or out-of-range position appends at the end.
 func (t *TreeService) MoveNodeToPosition(userID string, id string, parentID string, expectedVersion string, position int) error {
+	if t.pg != nil {
+		return t.Transact(context.Background(), func(local *TreeService) error {
+			return local.MoveNodeToPosition(userID, id, parentID, expectedVersion, position)
+		})
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -1462,6 +1623,10 @@ func restoreChildSnapshot(parent *PageNode, children []*PageNode, positions map[
 }
 
 func (t *TreeService) rollbackMovedNodeLocked(node *PageNode, oldParent *PageNode, newParent *PageNode, previousOldChildren []*PageNode, previousOldPositions map[string]int, previousNewChildren []*PageNode, previousNewPositions map[string]int, previousPosition int, previousMetadata PageMetadata, newParentWasConverted bool) error {
+	if _, ok := t.store.(*postgresNodeStore); ok {
+		return nil
+	} // The transaction rolls back all structural changes.
+
 	var rollbackErr error
 
 	if moveErr := t.store.MoveNode(node, oldParent); moveErr != nil {
@@ -1510,6 +1675,10 @@ func (t *TreeService) rollbackMovedNodeLocked(node *PageNode, oldParent *PageNod
 
 // SetPinned updates the leafwiki_pinned frontmatter field and in-memory Pinned flag.
 func (t *TreeService) SetPinned(id string, version string, pinned bool) (*Page, error) {
+	if t.pg != nil {
+		return pgWrite(t, func(local *TreeService) (*Page, error) { return local.SetPinned(id, version, pinned) })
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -1536,6 +1705,10 @@ func (t *TreeService) SetPinned(id string, version string, pinned bool) (*Page, 
 }
 
 func (t *TreeService) SortPages(parentID string, orderedIDs []string) error {
+	if t.pg != nil {
+		return t.Transact(context.Background(), func(local *TreeService) error { return local.SortPages(parentID, orderedIDs) })
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

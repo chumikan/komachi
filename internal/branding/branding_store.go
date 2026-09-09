@@ -1,8 +1,12 @@
 package branding
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/jackc/pgx/v5"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"os"
 	"path/filepath"
 
@@ -11,6 +15,7 @@ import (
 
 // BrandingStore handles reading and writing branding configuration
 type BrandingStore struct {
+	pg         *postgres.Store
 	storageDir string
 }
 
@@ -31,9 +36,15 @@ func (s *BrandingStore) brandingAssetsDir() string {
 
 // Load reads the branding configuration from disk
 func (s *BrandingStore) Load() (*BrandingConfig, error) {
-	data, err := os.ReadFile(s.configPath())
+	var data []byte
+	var err error
+	if s.pg != nil {
+		err = s.pg.DB().QueryRow(context.Background(), "SELECT value FROM instance_settings WHERE key='branding'").Scan(&data)
+	} else {
+		data, err = os.ReadFile(s.configPath())
+	}
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || errors.Is(err, pgx.ErrNoRows) {
 			return DefaultBrandingConfig(), nil
 		}
 		return nil, fmt.Errorf("failed to read branding config: %w", err)
@@ -57,6 +68,10 @@ func (s *BrandingStore) Save(config *BrandingConfig) error {
 		return fmt.Errorf("failed to marshal branding config: %w", err)
 	}
 
+	if s.pg != nil {
+		_, err := s.pg.DB().Exec(context.Background(), "INSERT INTO instance_settings(key,value) VALUES('branding',$1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", data)
+		return err
+	}
 	if err := shared.WriteFileAtomic(s.configPath(), data, 0644); err != nil {
 		return fmt.Errorf("failed to write branding config: %w", err)
 	}

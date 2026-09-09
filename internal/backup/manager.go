@@ -49,6 +49,12 @@ type Manager struct {
 	assetsDir  string
 }
 
+// PostgreSQL runtime must not present a filesystem-only Git archive as a full
+// backup. Keep legacy constructors for legacy tools/tests; never start Git here.
+func NewPostgresUnavailableManager() *Manager {
+	return &Manager{envManaged: true, bootErr: errors.New("Git backup only covers legacy filesystem content and is unavailable for PostgreSQL runtime; use Full Backup snapshots")}
+}
+
 // NewEnvManager wraps an already-built repo + scheduler produced by the
 // CLI/env path in cmd/leafwiki.
 func NewEnvManager(repo *Repository, sched *Scheduler) *Manager {

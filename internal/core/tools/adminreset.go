@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 
 	"github.com/perber/wiki/internal/core/auth"
@@ -19,4 +20,10 @@ func ResetAdminPassword(storageDir, username, email string) (*auth.User, error) 
 
 	userService := auth.NewUserService(store)
 	return userService.ResetAdminUserPassword(username, email)
+}
+
+func ResetPostgresAdminPassword(pg *postgres.Store, username, email string) (*auth.User, error) {
+	store := auth.NewPostgresUserStore(pg)
+	defer store.Close()
+	return auth.NewUserService(store).ResetAdminUserPassword(username, email)
 }

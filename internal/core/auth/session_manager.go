@@ -2,8 +2,10 @@ package auth
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"errors"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"log/slog"
 	"time"
 
@@ -30,6 +32,10 @@ type SessionManager struct {
 	// AuthService.ReplaceUserStore) rather than passed in here — at
 	// construction time there is no AuthService yet for it to read through.
 	resolveUser func(id string) (*User, error)
+
+	// Bind user lookup to the refresh transaction without acquiring a second
+	// pool connection. The auth composition root supplies the current store.
+	bindUserResolver func(*sql.Tx) func(string) (*User, error)
 
 	// now is a test seam (defaults to time.Now); tests in this package may
 	// override it with a fake clock.
@@ -106,6 +112,25 @@ func (s *SessionManager) IssueSession(user *User) (*AuthToken, error) {
 // fail the refresh — the old token expires naturally, and having two valid
 // tokens briefly is safer than logging the user out.
 func (s *SessionManager) RefreshToken(refreshToken string) (*AuthToken, error) {
+	if s.sessionStore.pg != nil && s.sessionStore.tx == nil {
+		var out *AuthToken
+		var db *sql.DB
+		if err := s.sessionStore.withDB(func(current *sql.DB) error { db = current; return nil }); err != nil {
+			return nil, err
+		}
+		err := postgres.WithSQLTx(db, func(tx *sql.Tx) error {
+			local := *s
+			local.sessionStore = &SessionStore{pg: s.sessionStore.pg, db: s.sessionStore.db, tx: tx}
+			if s.bindUserResolver != nil {
+				local.resolveUser = s.bindUserResolver(tx)
+			}
+			var err error
+			out, err = local.RefreshToken(refreshToken)
+			return err
+		})
+		return out, err
+	}
+
 	claims, err := s.parseClaims(refreshToken)
 	if err != nil {
 		return nil, ErrInvalidToken

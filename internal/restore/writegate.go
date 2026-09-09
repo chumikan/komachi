@@ -1,6 +1,8 @@
 package restore
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,9 +12,42 @@ import (
 // data out from under the running server. It has no HTTP dependency itself —
 // internal/http/middleware/maintenance wraps it as gin middleware.
 type WriteGate struct {
-	mu       sync.Mutex
-	engaged  bool
-	inflight int64
+	operation sync.Mutex
+	mu        sync.Mutex
+	engaged   bool
+	inflight  int64
+}
+
+// Freeze serializes PostgreSQL snapshots/restores and requires a complete drain.
+// Unlike the legacy restore path, it never proceeds after a drain timeout.
+func (g *WriteGate) Freeze(ctx context.Context) (func(), error) {
+	if !g.operation.TryLock() {
+		return nil, errors.New("another backup/restore operation is active")
+	}
+	if g.Engaged() {
+		g.operation.Unlock()
+		return nil, errors.New("maintenance gate is already engaged")
+	}
+	g.Engage()
+	timer := time.NewTimer(gateDrainTimeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for atomic.LoadInt64(&g.inflight) != 0 {
+		select {
+		case <-ctx.Done():
+			g.Disengage()
+			g.operation.Unlock()
+			return nil, ctx.Err()
+		case <-timer.C:
+			g.Disengage()
+			g.operation.Unlock()
+			return nil, errors.New("requests did not drain; backup/restore aborted")
+		case <-ticker.C:
+		}
+	}
+	var once sync.Once
+	return func() { once.Do(func() { g.Disengage(); g.operation.Unlock() }) }, nil
 }
 
 func NewWriteGate() *WriteGate {

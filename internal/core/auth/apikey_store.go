@@ -2,6 +2,8 @@ package auth
 
 import (
 	"database/sql"
+	"errors"
+	"github.com/perber/wiki/internal/storage/postgres"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +42,8 @@ func (k *APIKey) IsActive(now time.Time) bool {
 }
 
 type APIKeyStore struct {
+	pg         *postgres.Store
+	tx         *sql.Tx
 	mu         sync.Mutex
 	storageDir string
 	filename   string
@@ -70,6 +74,9 @@ func (s *APIKeyStore) withDB(fn func(db *sql.DB) error) error {
 		return errAPIKeyStoreUnavailable()
 	}
 
+	if s.db == nil && s.pg != nil {
+		s.db = s.pg.SQLDB()
+	}
 	if s.db == nil {
 		db, err := sql.Open("sqlite", databasePath(s.storageDir, s.filename)+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 		if err != nil {
@@ -93,6 +100,9 @@ func (s *APIKeyStore) withDB(fn func(db *sql.DB) error) error {
 // afterward (see APIKeyService.Replace), so there's no un-suspend. Idempotent:
 // a second call is a safe no-op.
 func (s *APIKeyStore) suspend() error {
+	if s.pg != nil {
+		return errors.New("legacy workspace restore cannot replace PostgreSQL authentication")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.suspended = true
@@ -126,7 +136,7 @@ func errAPIKeyStoreUnavailable() error {
 }
 
 func (s *APIKeyStore) ensureSchema() error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			CREATE TABLE IF NOT EXISTS api_keys (
 				id           TEXT PRIMARY KEY,
@@ -160,10 +170,10 @@ func (s *APIKeyStore) Close() error {
 }
 
 func (s *APIKeyStore) CreateAPIKey(key *APIKey) error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			INSERT INTO api_keys (id, name, user_id, prefix, key_hash, role, expires_at, created_by, created_at, last_used_at, revoked_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 		`, key.ID, key.Name, key.UserID, key.Prefix, key.KeyHash, key.Role,
 			timeToNullInt64(key.ExpiresAt), key.CreatedBy, key.CreatedAt.Unix(),
 			timeToNullInt64(key.LastUsedAt), timeToNullInt64(key.RevokedAt))
@@ -176,11 +186,11 @@ func (s *APIKeyStore) CreateAPIKey(key *APIKey) error {
 
 func (s *APIKeyStore) GetByPrefix(prefix string) (*APIKey, error) {
 	var key *APIKey
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		row := db.QueryRow(`
 			SELECT id, name, user_id, prefix, key_hash, role, expires_at, created_by, created_at, last_used_at, revoked_at
 			FROM api_keys
-			WHERE prefix = ?;
+			WHERE prefix = $1;
 		`, prefix)
 		var scanErr error
 		key, scanErr = scanAPIKey(row)
@@ -197,11 +207,11 @@ func (s *APIKeyStore) GetByPrefix(prefix string) (*APIKey, error) {
 
 func (s *APIKeyStore) GetByID(id string) (*APIKey, error) {
 	var key *APIKey
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		row := db.QueryRow(`
 			SELECT id, name, user_id, prefix, key_hash, role, expires_at, created_by, created_at, last_used_at, revoked_at
 			FROM api_keys
-			WHERE id = ?;
+			WHERE id = $1;
 		`, id)
 		var scanErr error
 		key, scanErr = scanAPIKey(row)
@@ -218,7 +228,7 @@ func (s *APIKeyStore) GetByID(id string) (*APIKey, error) {
 
 func (s *APIKeyStore) ListAll() ([]*APIKey, error) {
 	var keys []*APIKey
-	err := s.withDB(func(db *sql.DB) error {
+	err := s.withQueries(func(db postgres.SQLQueries) error {
 		rows, err := db.Query(`
 			SELECT id, name, user_id, prefix, key_hash, role, expires_at, created_by, created_at, last_used_at, revoked_at
 			FROM api_keys
@@ -251,11 +261,11 @@ func (s *APIKeyStore) Revoke(id string) error {
 	if _, err := s.GetByID(id); err != nil {
 		return err
 	}
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			UPDATE api_keys
-			SET revoked_at = ?
-			WHERE id = ? AND revoked_at IS NULL;
+			SET revoked_at = $1
+			WHERE id = $2 AND revoked_at IS NULL;
 		`, time.Now().Unix(), id)
 		return err
 	})
@@ -266,8 +276,8 @@ func (s *APIKeyStore) Revoke(id string) error {
 // is gone (APIKeyService.Resolve re-validates the owner on every use), so
 // this is orphaned-row hygiene rather than a security-critical revocation.
 func (s *APIKeyStore) DeleteAllForUser(userID string) error {
-	return s.withDB(func(db *sql.DB) error {
-		_, err := db.Exec(`DELETE FROM api_keys WHERE user_id = ?;`, userID)
+	return s.withQueries(func(db postgres.SQLQueries) error {
+		_, err := db.Exec(`DELETE FROM api_keys WHERE user_id = $1;`, userID)
 		return err
 	})
 }
@@ -275,17 +285,20 @@ func (s *APIKeyStore) DeleteAllForUser(userID string) error {
 // TouchLastUsed records that a key was just used. Throttling (to avoid a
 // write on every request) is the caller's responsibility.
 func (s *APIKeyStore) TouchLastUsed(id string, at time.Time) error {
-	return s.withDB(func(db *sql.DB) error {
+	return s.withQueries(func(db postgres.SQLQueries) error {
 		_, err := db.Exec(`
 			UPDATE api_keys
-			SET last_used_at = ?
-			WHERE id = ?;
+			SET last_used_at = $1
+			WHERE id = $2;
 		`, at.Unix(), id)
 		return err
 	})
 }
 
 func (s *APIKeyStore) mapConstraintViolationToError(err error) error {
+	if uniqueConstraint(err, "api_keys_prefix_key") {
+		return ErrAPIKeyPrefixCollision
+	}
 	if strings.Contains(err.Error(), "UNIQUE constraint failed: api_keys.prefix") {
 		return ErrAPIKeyPrefixCollision
 	}
@@ -327,4 +340,11 @@ func nullInt64ToTime(v sql.NullInt64) *time.Time {
 	}
 	t := time.Unix(v.Int64, 0)
 	return &t
+}
+
+func (s *APIKeyStore) withQueries(fn func(postgres.SQLQueries) error) error {
+	if s.tx != nil {
+		return fn(s.tx)
+	}
+	return s.withDB(func(db *sql.DB) error { return fn(db) })
 }
