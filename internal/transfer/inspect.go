@@ -118,7 +118,7 @@ func InspectLegacy(ctx context.Context, root string) (Report, error) {
 			}
 		}
 	}
-	for _, name := range []string{"branding.json", "public-access.json", "git-backup.json"} {
+	for _, name := range []string{"branding.json", "public-access.json"} {
 		raw, err := os.ReadFile(filepath.Join(root, name))
 		if os.IsNotExist(err) {
 			continue

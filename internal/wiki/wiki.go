@@ -30,7 +30,6 @@ import (
 	wikiassets "github.com/perber/wiki/internal/wiki/assets"
 	wikiauth "github.com/perber/wiki/internal/wiki/auth"
 	wikiavatar "github.com/perber/wiki/internal/wiki/avatar"
-	wikibackup "github.com/perber/wiki/internal/wiki/backup"
 	wikibranding "github.com/perber/wiki/internal/wiki/branding"
 	wikihealth "github.com/perber/wiki/internal/wiki/health"
 	wikiimporter "github.com/perber/wiki/internal/wiki/importer"
@@ -87,7 +86,6 @@ type Wiki struct {
 	favorites              *favorites.FavoritesStore
 	userSettings           *usersettings.UserSettingsService
 	userSettingsRoutes     *wikiusersettings.Routes
-	backupRoutes           *wikibackup.Routes
 	snapshotRoutes         *wikisnapshot.Routes
 	restoreRoutes          *wikirestore.Routes
 	instanceSettingsRoutes *wikiinstancesettings.Routes
@@ -739,9 +737,6 @@ func (w *Wiki) Registrars() []httpinternal.RouteRegistrar {
 		w.healthRoutes,
 		w.resyncRoutes,
 	}
-	if w.backupRoutes != nil {
-		registrars = append(registrars, w.backupRoutes)
-	}
 	if w.snapshotRoutes != nil {
 		registrars = append(registrars, w.snapshotRoutes)
 	}
@@ -752,11 +747,6 @@ func (w *Wiki) Registrars() []httpinternal.RouteRegistrar {
 		registrars = append(registrars, w.instanceSettingsRoutes)
 	}
 	return registrars
-}
-
-// SetBackupRoutes sets the backup routes and must be called before router creation.
-func (w *Wiki) SetBackupRoutes(r *wikibackup.Routes) {
-	w.backupRoutes = r
 }
 
 // SetSnapshotRoutes sets the full-backup (snapshot) routes and must be called before router creation.

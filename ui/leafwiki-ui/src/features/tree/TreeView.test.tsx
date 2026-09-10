@@ -77,17 +77,13 @@ vi.mock('./TreeNode', () => ({
   TreeNode: () => <div />,
 }))
 
-const { triggerPullMock, triggerResyncMock, getResyncStatusMock, toastMock } =
-  vi.hoisted(() => ({
-    triggerPullMock: vi.fn(),
+const { triggerResyncMock, getResyncStatusMock, toastMock } = vi.hoisted(
+  () => ({
     triggerResyncMock: vi.fn(),
     getResyncStatusMock: vi.fn(),
     toastMock: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
-  }))
-
-vi.mock('@/lib/api/backup', () => ({
-  triggerPull: () => triggerPullMock(),
-}))
+  }),
+)
 
 vi.mock('@/lib/api/resync', () => ({
   triggerResync: () => triggerResyncMock(),
@@ -120,7 +116,6 @@ function renderTreeView() {
 
 describe('TreeView explorer refresh button', () => {
   beforeEach(() => {
-    triggerPullMock.mockReset().mockResolvedValue(undefined)
     triggerResyncMock.mockReset().mockResolvedValue(undefined)
     getResyncStatusMock
       .mockReset()
@@ -136,7 +131,7 @@ describe('TreeView explorer refresh button', () => {
       pinnedPages: [],
       reloadTree: vi.fn().mockResolvedValue(undefined),
     })
-    useConfigStore.setState({ gitBackupEnabled: false, authDisabled: true })
+    useConfigStore.setState({ authDisabled: true })
     useSessionStore.setState({ user: null })
     useResyncStore.setState({ isLoading: false, phase: null })
   })
@@ -145,7 +140,7 @@ describe('TreeView explorer refresh button', () => {
     vi.restoreAllMocks()
   })
 
-  it('does a plain tree reload without pull/resync for non-admins', async () => {
+  it('does a plain tree reload without resync for non-admins', async () => {
     useSessionStore.setState({
       user: {
         id: '1',
@@ -162,11 +157,10 @@ describe('TreeView explorer refresh button', () => {
     await waitFor(() =>
       expect(useTreeStore.getState().reloadTree).toHaveBeenCalledTimes(1),
     )
-    expect(triggerPullMock).not.toHaveBeenCalled()
     expect(triggerResyncMock).not.toHaveBeenCalled()
   })
 
-  it('pulls, resyncs and reloads for admins when git backup is enabled', async () => {
+  it('resyncs and reloads for admins', async () => {
     useSessionStore.setState({
       user: {
         id: '1',
@@ -176,64 +170,15 @@ describe('TreeView explorer refresh button', () => {
         totpEnabled: false,
       },
     })
-    useConfigStore.setState({ gitBackupEnabled: true })
     renderTreeView()
 
     fireEvent.click(screen.getByTestId('tree-view-action-button-refresh'))
 
-    await waitFor(() =>
-      expect(toastMock.success).toHaveBeenCalledWith('toolbar.refreshSuccess'),
-    )
-    expect(triggerPullMock).toHaveBeenCalledTimes(1)
-    expect(triggerResyncMock).toHaveBeenCalledTimes(1)
-    expect(useTreeStore.getState().reloadTree).toHaveBeenCalledTimes(1)
-  })
-
-  it('skips the pull step for admins when git backup is disabled, but still resyncs', async () => {
-    useSessionStore.setState({
-      user: {
-        id: '1',
-        username: 'admin',
-        email: 'admin@example.com',
-        role: 'admin',
-        totpEnabled: false,
-      },
-    })
-    useConfigStore.setState({ gitBackupEnabled: false })
-    renderTreeView()
-
-    fireEvent.click(screen.getByTestId('tree-view-action-button-refresh'))
-
-    await waitFor(() =>
-      expect(toastMock.success).toHaveBeenCalledWith('toolbar.refreshSuccess'),
-    )
-    expect(triggerPullMock).not.toHaveBeenCalled()
-    expect(triggerResyncMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('shows an error toast but still resyncs when the pull fails', async () => {
-    useSessionStore.setState({
-      user: {
-        id: '1',
-        username: 'admin',
-        email: 'admin@example.com',
-        role: 'admin',
-        totpEnabled: false,
-      },
-    })
-    useConfigStore.setState({ gitBackupEnabled: true })
-    triggerPullMock.mockRejectedValue(new Error('pull conflict'))
-    renderTreeView()
-
-    fireEvent.click(screen.getByTestId('tree-view-action-button-refresh'))
-
-    await waitFor(() =>
-      expect(toastMock.error).toHaveBeenCalledWith('pull conflict'),
-    )
     await waitFor(() =>
       expect(toastMock.success).toHaveBeenCalledWith('toolbar.refreshSuccess'),
     )
     expect(triggerResyncMock).toHaveBeenCalledTimes(1)
+    expect(useTreeStore.getState().reloadTree).toHaveBeenCalledTimes(1)
   })
 
   it('shows an info toast when a resync is already running', async () => {
@@ -246,7 +191,6 @@ describe('TreeView explorer refresh button', () => {
         totpEnabled: false,
       },
     })
-    useConfigStore.setState({ gitBackupEnabled: false })
     triggerResyncMock.mockRejectedValue(
       new ApiLocalizedError({
         code: 'resync_already_running',
@@ -284,7 +228,6 @@ describe('TreeView explorer refresh button', () => {
         totpEnabled: false,
       },
     })
-    useConfigStore.setState({ gitBackupEnabled: false })
     renderTreeView()
 
     fireEvent.click(screen.getByTestId('tree-view-action-button-refresh'))

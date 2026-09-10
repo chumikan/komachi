@@ -83,7 +83,7 @@ describe('createLeafWikiRouter /settings route', () => {
     expect((element.props as { to: string }).to).toBe('/settings/users')
   })
 
-  it('gates every settings section route through SettingsSectionGuard — regression for the pre-registry backup/snapshots direct-URL bypass', () => {
+  it('gates every settings section route through SettingsSectionGuard — regression for the pre-registry snapshots direct-URL bypass', () => {
     const router = createLeafWikiRouter(false, false, false, '', true)
     const settingsRoute = router.routes.find((r) => r.path === '/settings')
     const children = settingsRoute?.children ?? []

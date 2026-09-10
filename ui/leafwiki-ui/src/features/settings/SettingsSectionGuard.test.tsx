@@ -64,17 +64,17 @@ describe('SettingsSectionGuard', () => {
     expect(screen.queryByTestId('section-content')).not.toBeInTheDocument()
   })
 
-  it('redirects to /settings when isEnabled returns false (the backup/snapshots URL-bypass gap)', () => {
+  it('redirects to /settings when isEnabled returns false (the snapshots URL-bypass gap)', () => {
     mockUseSettingsSectionContext.mockReturnValue({
       role: 'admin',
-      gitBackupEnabled: false,
+      snapshotEnabled: false,
     })
 
     renderGuard({
-      id: 'backup',
+      id: 'snapshots',
       roles: ['admin'],
       isEnabled: (ctx: unknown) =>
-        !!(ctx as { gitBackupEnabled?: boolean }).gitBackupEnabled,
+        !!(ctx as { snapshotEnabled?: boolean }).snapshotEnabled,
     })
 
     expect(screen.getByTestId('settings-index')).toBeInTheDocument()

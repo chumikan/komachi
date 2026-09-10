@@ -24,7 +24,6 @@ const baseConfig = {
   enableRevision: false,
   enableLinkRefactor: false,
   enableApiKeyManagement: false,
-  gitBackupEnabled: false,
   snapshotEnabled: false,
   smtpEnabled: false,
   totpAvailable: false,

@@ -9,8 +9,6 @@ import {
 const baseCtx: SettingsSectionContext = {
   role: 'admin',
   authDisabled: false,
-  gitBackupEnabled: false,
-  gitBackupEnvManaged: false,
   snapshotEnabled: false,
   enableApiKeyManagement: false,
   totpAvailable: false,
@@ -59,8 +57,8 @@ describe('isSectionVisible', () => {
   it('is hidden when isEnabled returns false, even for an allowed role', () => {
     expect(
       isSectionVisible(
-        section({ roles: ['admin'], isEnabled: (ctx) => ctx.gitBackupEnabled }),
-        { ...baseCtx, role: 'admin', gitBackupEnabled: false },
+        section({ roles: ['admin'], isEnabled: (ctx) => ctx.snapshotEnabled }),
+        { ...baseCtx, role: 'admin', snapshotEnabled: false },
       ),
     ).toBe(false)
   })
@@ -68,8 +66,8 @@ describe('isSectionVisible', () => {
   it('is visible when isEnabled returns true and the role matches', () => {
     expect(
       isSectionVisible(
-        section({ roles: ['admin'], isEnabled: (ctx) => ctx.gitBackupEnabled }),
-        { ...baseCtx, role: 'admin', gitBackupEnabled: true },
+        section({ roles: ['admin'], isEnabled: (ctx) => ctx.snapshotEnabled }),
+        { ...baseCtx, role: 'admin', snapshotEnabled: true },
       ),
     ).toBe(true)
   })
@@ -87,12 +85,12 @@ describe('isSectionVisible', () => {
   it('still enforces isEnabled feature flags even when auth is disabled', () => {
     expect(
       isSectionVisible(
-        section({ roles: ['admin'], isEnabled: (ctx) => ctx.gitBackupEnabled }),
+        section({ roles: ['admin'], isEnabled: (ctx) => ctx.snapshotEnabled }),
         {
           ...baseCtx,
           authDisabled: true,
           role: undefined,
-          gitBackupEnabled: false,
+          snapshotEnabled: false,
         },
       ),
     ).toBe(false)
@@ -116,21 +114,7 @@ describe('isSectionVisible', () => {
   })
 })
 
-describe('settingsSections gating (regression for the pre-registry backup/snapshots URL-bypass gap)', () => {
-  it('shows backup to admins whether or not a backup is configured (form vs. status-only is decided inside the section)', () => {
-    const backup = settingsSections.find((s) => s.id === 'backup')!
-    expect(
-      isSectionVisible(backup, { ...baseCtx, gitBackupEnabled: false }),
-    ).toBe(true)
-    expect(
-      isSectionVisible(backup, {
-        ...baseCtx,
-        gitBackupEnabled: true,
-        gitBackupEnvManaged: true,
-      }),
-    ).toBe(true)
-  })
-
+describe('settingsSections gating (regression for the pre-registry snapshots URL-bypass gap)', () => {
   it('gates snapshots behind snapshotEnabled', () => {
     const snapshots = settingsSections.find((s) => s.id === 'snapshots')!
     expect(
@@ -185,7 +169,6 @@ describe('settingsSections gating (regression for the pre-registry backup/snapsh
       'branding',
       'users',
       'api-keys',
-      'backup',
       'snapshots',
       'importer',
     ]
@@ -195,7 +178,6 @@ describe('settingsSections gating (regression for the pre-registry backup/snapsh
         isSectionVisible(s, {
           ...baseCtx,
           role: 'editor',
-          gitBackupEnabled: true,
           snapshotEnabled: true,
           enableApiKeyManagement: true,
         }),

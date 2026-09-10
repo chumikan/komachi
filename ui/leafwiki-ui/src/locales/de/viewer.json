@@ -82,7 +82,6 @@
     "refreshSuccess": "Explorer aktualisiert",
     "refreshError": "Aktualisierung fehlgeschlagen",
     "refreshAlreadyRunning": "Aktualisierung läuft bereits",
-    "refreshPullFailed": "Abrufen der Remote-Änderungen fehlgeschlagen",
     "syncJobLostFallback": "Sync-Job verloren — Server wurde möglicherweise neu gestartet"
   },
   "pageToolbar": {

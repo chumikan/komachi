@@ -9,14 +9,12 @@ import { FavoritesSection } from '@/features/favorites/FavoritesSection'
 import { SidebarAccordionSection } from '@/features/sidebar/SidebarAccordionSection'
 import { TreeViewActionButton } from '@/features/tree/TreeViewActionButton'
 import { ApiLocalizedError, mapApiError } from '@/lib/api/errors'
-import { triggerPull } from '@/lib/api/backup'
 import { NODE_KIND_PAGE, NODE_KIND_SECTION } from '@/lib/api/pages'
 import { DIALOG_ADD_PAGE, DIALOG_SORT_PAGES } from '@/lib/registries'
 import { routeToWikiPath } from '@/lib/routePath'
 import { useAppMode } from '@/lib/useAppMode'
 import { useIsReadOnly } from '@/lib/useIsReadOnly'
 import { toWikiLookupPath } from '@/lib/wikiPath'
-import { useConfigStore } from '@/stores/config'
 import { useDialogsStore } from '@/stores/dialogs'
 import { useFavoritesStore } from '@/stores/favorites'
 import { useResyncStore } from '@/stores/resync'
@@ -69,7 +67,6 @@ export default function TreeView() {
   const user = useSessionStore((s) => s.user)
   const isLoggedIn = user !== null
   const isAdmin = user?.role === 'admin'
-  const gitBackupEnabled = useConfigStore((s) => s.gitBackupEnabled)
   const hasFavorites = isLoggedIn && favoritePageIds.size > 0
   const openDialog = useDialogsStore((state) => state.openDialog)
   const readOnlyMode = useIsReadOnly()
@@ -120,14 +117,6 @@ export default function TreeView() {
 
     setRefreshing(true)
     try {
-      if (gitBackupEnabled) {
-        try {
-          await triggerPull()
-        } catch (err) {
-          toast.error(mapApiError(err, t('toolbar.refreshPullFailed')).message)
-        }
-      }
-
       await useResyncStore.getState().trigger()
       await reloadTree()
       // reloadTree() catches its own fetch failures and only records them in

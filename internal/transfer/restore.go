@@ -69,7 +69,7 @@ func RestoreBackup(ctx context.Context, pg *postgres.Store, dsn, dataDir, archiv
 		return err
 	}
 	old := filepath.Join(stage, "previous-files")
-	names := append(append([]string{}, assetRoots...), "git-backup.json", receiptFile)
+	names := append(append([]string{}, assetRoots...), receiptFile)
 	ignoreNames := map[string]bool{}
 	for _, file := range manifest.Files {
 		if isIgnoreFile(file.Path) {

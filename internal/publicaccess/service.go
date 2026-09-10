@@ -1,8 +1,7 @@
 // Package publicaccess owns the "public mode" flag: whether unauthenticated
 // visitors may read every page.
 //
-// It has two modes, chosen once at construction, mirroring the env- vs
-// settings-managed split internal/backup uses for git backup:
+// It has two modes, chosen once at construction:
 //
 //   - env-managed (NewEnvManaged): the value is pinned by --public-access /
 //     LEAFWIKI_PUBLIC_ACCESS, or forced true by --disable-auth. Enabled()

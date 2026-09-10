@@ -210,7 +210,7 @@ func persistentInventory(ctx context.Context, dataDir string) ([]FileRecord, err
 			result = append(result, f)
 		}
 	}
-	for _, name := range []string{"git-backup.json", receiptFile} {
+	for _, name := range []string{receiptFile} {
 		path := filepath.Join(dataDir, name)
 		st, err := os.Lstat(path)
 		if os.IsNotExist(err) {

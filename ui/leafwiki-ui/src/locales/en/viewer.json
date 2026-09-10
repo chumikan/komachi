@@ -82,7 +82,6 @@
     "refreshSuccess": "Explorer refreshed",
     "refreshError": "Refresh failed",
     "refreshAlreadyRunning": "Refresh already in progress",
-    "refreshPullFailed": "Pulling remote changes failed",
     "syncJobLostFallback": "Sync job lost — server may have restarted"
   },
   "pageToolbar": {

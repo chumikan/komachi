@@ -5,7 +5,6 @@
 // settings-admin-sections-shared-chunk.md. Account stays out of this barrel
 // since it's visible to non-admin users too.
 export { default as ApiKeysManagement } from '../apikeys/ApiKeysManagement'
-export { default as BackupSettings } from '../backup/BackupSettings'
 export { default as BrandingSettings } from '../branding/BrandingSettings'
 export { default as Importer } from '../importer/Importer'
 export { default as PublicAccessSettings } from './PublicAccessSettings'

@@ -25,7 +25,6 @@ const (
 	catFeatures  = "Features"
 	catRevisions = "Revisions"
 	catMetrics   = "Metrics"
-	catGitBackup = "Git backup"
 	catSnapshots = "Snapshots & restore"
 	catEmail     = "Email (SMTP)"
 )

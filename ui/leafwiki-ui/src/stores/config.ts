@@ -21,9 +21,6 @@ type ConfigStore = {
   enableRevision: boolean
   enableLinkRefactor: boolean
   enableApiKeyManagement: boolean
-  gitBackupEnabled: boolean
-  gitBackupEnvManaged: boolean
-  gitBackupConfigured: boolean
   snapshotEnabled: boolean
   smtpEnabled: boolean
   totpAvailable: boolean
@@ -72,9 +69,6 @@ export const useConfigStore = create<ConfigStore>((set) => ({
   enableRevision: false,
   enableLinkRefactor: false,
   enableApiKeyManagement: false,
-  gitBackupEnabled: false,
-  gitBackupEnvManaged: false,
-  gitBackupConfigured: false,
   snapshotEnabled: false,
   smtpEnabled: false,
   totpAvailable: false,
@@ -122,9 +116,6 @@ export const useConfigStore = create<ConfigStore>((set) => ({
           enableRevision: config.enableRevision ?? false,
           enableLinkRefactor: config.enableLinkRefactor ?? false,
           enableApiKeyManagement: config.enableApiKeyManagement ?? false,
-          gitBackupEnabled: config.gitBackupEnabled ?? false,
-          gitBackupEnvManaged: config.gitBackupEnvManaged ?? false,
-          gitBackupConfigured: config.gitBackupConfigured ?? false,
           snapshotEnabled: config.snapshotEnabled ?? false,
           smtpEnabled: config.smtpEnabled ?? false,
           totpAvailable: config.totpAvailable ?? false,

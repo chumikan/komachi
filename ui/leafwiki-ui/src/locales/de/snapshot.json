@@ -1,6 +1,6 @@
 {
   "pageTitle": "Vollständige Sicherung",
-  "pageDescription": "Erstellt herunterladbare Komplettsicherungen, einschließlich der Datenbank (Benutzer, TOTP-Geheimnisse) sowie Seiteninhalt, Dateien und Branding-Einstellungen. Dies ist unabhängig von der Git-Inhaltssicherung, die nur den Seiteninhalt umfasst.",
+  "pageDescription": "Erstellt herunterladbare Komplettsicherungen, einschließlich der Datenbank (Benutzer, TOTP-Geheimnisse) sowie Seiteninhalt, Dateien und Branding-Einstellungen.",
   "sectionTitle": "Vollständige Sicherung",
   "sectionDescription": "Erstellt automatisch im konfigurierten Intervall eine vollständige Sicherung. Es werden nur die zuletzt erstellten Sicherungen aufbewahrt — konfigurieren Sie Zeitplan und Aufbewahrungsanzahl in Ihren Server-Umgebungseinstellungen.",
   "statusLabel": "Status",

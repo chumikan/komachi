@@ -23,7 +23,6 @@ describe('SettingsNav', () => {
     mockUseSettingsSectionContext.mockReturnValue({
       role: 'viewer',
       authDisabled: false,
-      gitBackupEnabled: true,
       snapshotEnabled: true,
       enableApiKeyManagement: true,
       totpAvailable: true,
@@ -49,7 +48,6 @@ describe('SettingsNav', () => {
     mockUseSettingsSectionContext.mockReturnValue({
       role: 'admin',
       authDisabled: false,
-      gitBackupEnabled: true,
       snapshotEnabled: false,
       enableApiKeyManagement: true,
       totpAvailable: true,
@@ -63,7 +61,6 @@ describe('SettingsNav', () => {
     )
 
     expect(screen.getByTestId('settings-nav-item-branding')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-nav-item-backup')).toBeInTheDocument()
     expect(
       screen.queryByTestId('settings-nav-item-snapshots'),
     ).not.toBeInTheDocument()
@@ -82,7 +79,6 @@ describe('SettingsNav', () => {
     mockUseSettingsSectionContext.mockReturnValue({
       role: 'admin',
       authDisabled: false,
-      gitBackupEnabled: false,
       snapshotEnabled: false,
       enableApiKeyManagement: false,
       totpAvailable: false,

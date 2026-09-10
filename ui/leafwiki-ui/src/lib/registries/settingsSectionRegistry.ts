@@ -8,7 +8,6 @@ import { hasRole } from '@/lib/roles'
 import {
   AccountSettings,
   ApiKeysManagement,
-  BackupSettings,
   BrandingSettings,
   Importer,
   PublicAccessSettings,
@@ -19,7 +18,6 @@ import { useConfigStore } from '@/stores/config'
 import { useSessionStore } from '@/stores/session'
 import {
   Camera,
-  GitBranch,
   Globe,
   KeyRound,
   Palette,
@@ -33,8 +31,6 @@ import type { ComponentType, LazyExoticComponent } from 'react'
 export interface SettingsSectionContext {
   role: string | undefined
   authDisabled: boolean
-  gitBackupEnabled: boolean
-  gitBackupEnvManaged: boolean
   snapshotEnabled: boolean
   enableApiKeyManagement: boolean
   totpAvailable: boolean
@@ -129,17 +125,6 @@ export const settingsSections: SettingsSection[] = [
     Component: ApiKeysManagement,
   },
   {
-    id: 'backup',
-    path: 'backup',
-    labelKey: 'menuLabel',
-    ns: 'backup',
-    icon: GitBranch,
-    roles: ['admin'],
-    // Always visible to admins: when git backup is env-managed the section is
-    // status-only, otherwise it hosts the configuration form.
-    Component: BackupSettings,
-  },
-  {
     id: 'snapshots',
     path: 'snapshots',
     labelKey: 'menuLabel',
@@ -163,8 +148,6 @@ export const settingsSections: SettingsSection[] = [
 export function useSettingsSectionContext(): SettingsSectionContext {
   const role = useSessionStore((s) => s.user?.role)
   const authDisabled = useConfigStore((s) => s.authDisabled)
-  const gitBackupEnabled = useConfigStore((s) => s.gitBackupEnabled)
-  const gitBackupEnvManaged = useConfigStore((s) => s.gitBackupEnvManaged)
   const snapshotEnabled = useConfigStore((s) => s.snapshotEnabled)
   const enableApiKeyManagement = useConfigStore((s) => s.enableApiKeyManagement)
   const totpAvailable = useConfigStore((s) => s.totpAvailable)
@@ -174,8 +157,6 @@ export function useSettingsSectionContext(): SettingsSectionContext {
   return {
     role,
     authDisabled,
-    gitBackupEnabled,
-    gitBackupEnvManaged,
     snapshotEnabled,
     enableApiKeyManagement,
     totpAvailable,

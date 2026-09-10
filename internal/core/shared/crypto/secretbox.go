@@ -11,13 +11,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 // MinKeyLen is the minimum accepted length, in bytes, of the key material
@@ -83,17 +80,4 @@ func (b *SecretBox) Open(encoded string) (string, error) {
 		return "", fmt.Errorf("%w: %v", ErrCiphertextInvalid, err)
 	}
 	return string(plaintext), nil
-}
-
-// DeriveKey expands secret into a MinKeyLen-byte key using HKDF-SHA256 with a
-// fixed, purpose-specific info label. Different labels yield independent keys
-// from the same secret, so one application secret (e.g. the JWT signing key)
-// can safely key several unrelated SecretBoxes.
-func DeriveKey(secret []byte, info string) ([]byte, error) {
-	r := hkdf.New(sha256.New, secret, nil, []byte(info))
-	key := make([]byte, MinKeyLen)
-	if _, err := io.ReadFull(r, key); err != nil {
-		return nil, fmt.Errorf("hkdf expand: %w", err)
-	}
-	return key, nil
 }

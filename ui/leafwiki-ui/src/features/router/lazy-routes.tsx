@@ -14,11 +14,6 @@ export const ApiKeysManagement = lazy(() =>
     default: m.ApiKeysManagement,
   })),
 )
-export const BackupSettings = lazy(() =>
-  import('../settings/adminSections').then((m) => ({
-    default: m.BackupSettings,
-  })),
-)
 export const BrandingSettings = lazy(() =>
   import('../settings/adminSections').then((m) => ({
     default: m.BrandingSettings,

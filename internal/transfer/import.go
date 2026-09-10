@@ -240,7 +240,7 @@ func ImportLegacy(ctx context.Context, pg *postgres.Store, source, target string
 }
 
 func persistentFile(path string) bool {
-	return strings.HasPrefix(path, "assets/") || strings.HasPrefix(path, "avatars/") || strings.HasPrefix(path, "branding/") || strings.HasPrefix(path, ".leafwiki/blobs/assets/") || path == "git-backup.json" || isIgnoreFile(path)
+	return strings.HasPrefix(path, "assets/") || strings.HasPrefix(path, "avatars/") || strings.HasPrefix(path, "branding/") || strings.HasPrefix(path, ".leafwiki/blobs/assets/") || isIgnoreFile(path)
 }
 
 func isIgnoreFile(path string) bool {

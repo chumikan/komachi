@@ -22,11 +22,9 @@ import (
 
 	"github.com/dustin/go-humanize"
 	"github.com/gin-gonic/gin"
-	"github.com/perber/wiki/internal/backup"
 	"github.com/perber/wiki/internal/core/auth"
 	"github.com/perber/wiki/internal/core/email"
 	"github.com/perber/wiki/internal/core/ignore"
-	sharedcrypto "github.com/perber/wiki/internal/core/shared/crypto"
 	"github.com/perber/wiki/internal/core/tools"
 	httpinternal "github.com/perber/wiki/internal/http"
 	httpmetrics "github.com/perber/wiki/internal/http/metrics"
@@ -37,7 +35,6 @@ import (
 	"github.com/perber/wiki/internal/storage/postgres"
 	"github.com/perber/wiki/internal/transfer"
 	"github.com/perber/wiki/internal/wiki"
-	wikibackup "github.com/perber/wiki/internal/wiki/backup"
 	wikiinstancesettings "github.com/perber/wiki/internal/wiki/instancesettings"
 	wikirestore "github.com/perber/wiki/internal/wiki/restore"
 	wikisnapshot "github.com/perber/wiki/internal/wiki/snapshot"
@@ -49,11 +46,6 @@ import (
 // release/Docker builds all inject the real version resolved by
 // scripts/resolve-version.sh via -ldflags "-X main.Version=v0.12.0".
 var Version = "dev"
-
-const (
-	gitBackupSSHKeyFlagName       = "git-backup-ssh-key"
-	gitBackupHTTPPasswordFlagName = "git-backup-http-password"
-)
 
 func setupLogger(w io.Writer, format string) {
 	level := slog.LevelInfo
@@ -211,14 +203,6 @@ func runServerCommand(ctx context.Context, cmd *cli.Command, cfg *serverConfig) 
 		)
 	}
 
-	// Validate git backup configuration
-	// Note: git-backup-remote is optional (local-only mode is supported)
-	if cfg.backup.gitBackup {
-		if err := validateGitBackupRemote(cfg.backup.gitBackupRemote, cfg.backup.gitBackupSSHKey, cfg.backup.gitBackupSSHKeyPath, cfg.backup.gitBackupHTTPUsername, cfg.backup.gitBackupHTTPPassword); err != nil {
-			fail("Invalid git backup configuration", "error", err)
-		}
-	}
-
 	if cfg.auth.disableAuth {
 		slog.Default().Warn("Authentication disabled. Wiki is publicly accessible without authentication.")
 	}
@@ -302,11 +286,6 @@ func runServerCommand(ctx context.Context, cmd *cli.Command, cfg *serverConfig) 
 		}
 	}()
 
-	// Legacy filesystem Git backup does not support PostgreSQL page content.
-	backupManager := backup.NewPostgresUnavailableManager()
-	defer backupManager.Stop()
-	w.SetBackupRoutes(wikibackup.NewRoutes(backupManager, w.AuthService()))
-
 	// Initialize full backup snapshots if enabled
 	var writeGate *restore.WriteGate
 	if cfg.backup.snapshot {
@@ -380,9 +359,6 @@ func runServerCommand(ctx context.Context, cmd *cli.Command, cfg *serverConfig) 
 		EnableLinkRefactor:      cfg.frontend.enableLinkRefactor,
 		EnableAPIKeyManagement:  cfg.frontend.enableAPIKeyManagement,
 		Metrics:                 metrics,
-		GitBackupEnabled:        backupManager.Enabled(),
-		GitBackupEnvManaged:     backupManager.EnvManaged(),
-		GitBackupConfigured:     backupManager.Configured(),
 		SnapshotEnabled:         cfg.backup.snapshot,
 		SMTPEnabled:             smtpEnabled,
 		TOTPAvailable:           w.TOTPService() != nil,
@@ -686,66 +662,6 @@ func resolveLogoutURL(logoutURL, deprecated string) (resolved string, usedDeprec
 		return "", false
 	}
 	return deprecated, true
-}
-
-// validateGitBackupRemote checks the git backup remote URL and that credentials
-// matching its transport are configured: HTTP(S) remotes authenticate with a
-// username + password/token (e.g. a repo-scoped access token), SSH remotes with
-// a private key. An empty remote means local-only backup and needs no
-// credentials at all.
-func validateGitBackupRemote(remote, sshKey, sshKeyPath, httpUsername, httpPassword string) error {
-	return backup.ValidateRemoteCredentials(remote, sshKey, sshKeyPath, httpUsername, httpPassword)
-}
-
-// buildBackupManager wires up the git backup Manager in one of two modes:
-//   - env-managed: --git-backup / LEAFWIKI_GIT_BACKUP is set. Config comes from
-//     flags/env and the settings UI is status-only (historical behaviour).
-//   - settings-managed: otherwise. Config lives in <data-dir>/git-backup.json,
-//     written by admins via /settings/backup; the SSH key and HTTP password are
-//     encrypted at rest with a key derived from the JWT secret (plaintext under
-//     --disable-auth, where there is no such secret).
-func buildBackupManager(cfg *serverConfig) (*backup.Manager, error) {
-	rootDir := filepath.Join(cfg.server.dataDir, "root")
-	assetsDir := filepath.Join(cfg.server.dataDir, "assets")
-
-	if !cfg.backup.gitBackup {
-		var box *sharedcrypto.SecretBox
-		if cfg.auth.jwtSecret != "" {
-			if key, err := sharedcrypto.DeriveKey([]byte(cfg.auth.jwtSecret), backup.CredentialsKeyInfo); err == nil {
-				box, _ = sharedcrypto.NewSecretBox(key)
-			}
-		}
-		return backup.NewSettingsManager(backup.NewConfigStore(cfg.server.dataDir, box), rootDir, assetsDir)
-	}
-
-	if cfg.backup.gitBackupSSHKey != "" && os.Getenv("LEAFWIKI_GIT_BACKUP_SSH_KEY") == "" {
-		slog.Warn("SSH private key passed via --git-backup-ssh-key flag is visible in process listings; prefer the LEAFWIKI_GIT_BACKUP_SSH_KEY environment variable")
-	}
-	if cfg.backup.gitBackupHTTPPassword != "" && os.Getenv("LEAFWIKI_GIT_BACKUP_HTTP_PASSWORD") == "" {
-		slog.Warn("HTTP password passed via --git-backup-http-password flag is visible in process listings; prefer the LEAFWIKI_GIT_BACKUP_HTTP_PASSWORD environment variable")
-	}
-	if strings.HasPrefix(strings.ToLower(cfg.backup.gitBackupRemote), "http://") {
-		slog.Warn("--git-backup-remote uses plain http://; git backup credentials and wiki content are transmitted unencrypted — use https:// unless the remote is on a trusted network")
-	}
-	repo, err := backup.Init(backup.Config{
-		Enabled:           true,
-		RootDir:           rootDir,
-		AssetsDir:         assetsDir,
-		AuthorName:        cfg.backup.gitBackupAuthorName,
-		AuthorEmail:       cfg.backup.gitBackupAuthorEmail,
-		RemoteURL:         cfg.backup.gitBackupRemote,
-		Branch:            cfg.backup.gitBackupBranch,
-		SSHKeyPath:        cfg.backup.gitBackupSSHKeyPath,
-		SSHKey:            cfg.backup.gitBackupSSHKey,
-		SSHKnownHostsPath: cfg.backup.gitBackupSSHKnownHosts,
-		HTTPUsername:      cfg.backup.gitBackupHTTPUsername,
-		HTTPPassword:      cfg.backup.gitBackupHTTPPassword,
-		Interval:          cfg.backup.gitBackupInterval,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return backup.NewEnvManager(repo, backup.NewScheduler(repo)), nil
 }
 
 func validateRedirectURL(flagName, url string) error {
