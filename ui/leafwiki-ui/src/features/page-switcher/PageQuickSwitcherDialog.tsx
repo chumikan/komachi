@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import {
   Dialog,
   DialogContent,
@@ -80,7 +81,7 @@ export function PageQuickSwitcherDialog() {
   const openResult = (path: string) => {
     queueMicrotask(() => {
       openAncestorsForPath(path)
-      navigate(`/${path}`, { state: createNavigationVisitState() })
+      navigate(buildViewUrl(path), { state: createNavigationVisitState() })
       closeDialog()
     })
   }

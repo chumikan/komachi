@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import Page404 from '@/components/Page404'
 import { getPermalinkTarget } from '@/lib/api/pages'
 import { isPageNotFoundError } from '@/lib/api/errors'
@@ -32,7 +33,7 @@ export default function PermalinkRedirect() {
         const target = await getPermalinkTarget(id)
         if (!active) return
 
-        navigate(target.path ? `/${target.path}` : '/', {
+        navigate(buildViewUrl(target.path || ''), {
           replace: true,
           state: location.state,
         })

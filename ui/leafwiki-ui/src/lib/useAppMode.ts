@@ -9,14 +9,14 @@ export function useAppMode(): AppMode {
   const location = useLocation()
   const pathname = stripBasePath(location.pathname) ?? location.pathname
 
-  if (pathname.startsWith('/e/')) {
+  if (pathname.startsWith('/ja/e/')) {
     return 'edit'
   }
 
   if (
-    pathname === '/history' ||
-    pathname === '/history/' ||
-    pathname.startsWith('/history/')
+    pathname === '/ja/history' ||
+    pathname === '/ja/history/' ||
+    pathname.startsWith('/ja/history/')
   ) {
     return 'history'
   }

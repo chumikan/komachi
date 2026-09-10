@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import Page404 from '@/components/Page404'
 import { mapApiError, asApiLocalizedError } from '@/lib/api/errors'
 import { createNavigationVisitState } from '@/lib/navigationVisit'
@@ -155,7 +156,7 @@ export default function PageEditor() {
     }
 
     if (currentPage?.path) {
-      navigate(`/${currentPage.path}`, {
+      navigate(buildViewUrl(currentPage.path), {
         state: createNavigationVisitState(),
       })
     } else {

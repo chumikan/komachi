@@ -1,6 +1,11 @@
 import { PageRefactorPreview } from '@/lib/api/pages'
 import { createNavigationVisitState } from '@/lib/navigationVisit'
-import { buildEditUrl, buildHistoryUrl, buildViewUrl } from '@/lib/routePath'
+import {
+  buildEditUrl,
+  buildHistoryUrl,
+  routeToWikiPath,
+  buildViewUrl,
+} from '@/lib/routePath'
 import { normalizeWikiRoutePath } from '@/lib/wikiPath'
 import { useTreeStore } from '@/stores/tree'
 import { NavigateFunction } from 'react-router'
@@ -32,15 +37,15 @@ function buildRefactorRoutePath(currentPath: string, nextWikiPath: string) {
   const normalizedCurrentPath = normalizeRoutePath(currentPath)
 
   if (
-    normalizedCurrentPath === '/history' ||
-    normalizedCurrentPath === '/history/'
+    normalizedCurrentPath === '/ja/history' ||
+    normalizedCurrentPath === '/ja/history/'
   ) {
     return buildHistoryUrl(nextWikiPath)
   }
-  if (normalizedCurrentPath.startsWith('/history/')) {
+  if (normalizedCurrentPath.startsWith('/ja/history/')) {
     return buildHistoryUrl(nextWikiPath)
   }
-  if (normalizedCurrentPath.startsWith('/e/')) {
+  if (normalizedCurrentPath.startsWith('/ja/e/')) {
     return buildEditUrl(nextWikiPath)
   }
 
@@ -59,7 +64,9 @@ export async function refreshAfterPageRefactor({
   const normalizedViewerPath = normalizeWikiRoutePath(
     currentViewerPage?.path || '',
   )
-  const normalizedRoutePath = normalizeWikiRoutePath(buildViewUrl(currentPath))
+  const normalizedRoutePath = normalizeWikiRoutePath(
+    routeToWikiPath(currentPath),
+  )
   const normalizedOldPath = normalizeWikiRoutePath(preview.oldPath)
   const normalizedNewPath = normalizeWikiRoutePath(preview.newPath)
   const isViewingMovedPage =

@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import BaseDialog from '@/components/BaseDialog'
 import { Checkbox } from '@/components/ui/checkbox'
 import { fetchLinkStatus, type Backlink } from '@/lib/api/links'
@@ -208,7 +209,7 @@ export function DeletePageDialog({
                   <li key={backlink.from_page_id}>
                     <Link
                       className="underline"
-                      to={backlink.from_path}
+                      to={buildViewUrl(backlink.from_path)}
                       state={createNavigationVisitState()}
                     >
                       {backlink.from_title}

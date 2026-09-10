@@ -1,7 +1,7 @@
 import SettingsSectionGuard from '@/features/settings/SettingsSectionGuard'
 import { settingsSections } from '@/lib/registries/settingsSectionRegistry'
 import { isValidElement } from 'react'
-import { Navigate } from 'react-router'
+import { Navigate, matchRoutes } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import ExternalRedirect from '../auth/ExternalRedirect'
 import { ForgotPasswordForm, LoginForm } from './lazy-routes'
@@ -97,6 +97,37 @@ describe('createLeafWikiRouter /settings route', () => {
         )
       }
       expect(element.type).toBe(SettingsSectionGuard)
+    }
+  })
+})
+
+describe('Japanese wiki route boundary', () => {
+  it('keeps wiki and system routes separate without legacy slug redirects', () => {
+    const router = createLeafWikiRouter(false, false, true, '', true)
+    try {
+      for (const [url, pattern] of [
+        ['/ja/', '/ja/'],
+        ['/ja/top-level-domain', '/ja/*'],
+        ['/ja/folder/page', '/ja/*'],
+        ['/ja/e/page', '/ja/e/*'],
+        ['/ja/history/page', '/ja/history/*'],
+        ['/ja/p/id/slug', '/ja/p/:id/:slug?'],
+        ['/login', '/login'],
+        ['/settings/users', 'users'],
+        ['/top-level-domain', '*'],
+        ['/e/page', '*'],
+        ['/en/page', '*'],
+      ]) {
+        expect(matchRoutes(router.routes, url)?.at(-1)?.route.path).toBe(
+          pattern,
+        )
+      }
+      const root = router.routes.find((route) => route.path === '/')?.element
+      expect(isValidElement(root) && (root.props as { to: string }).to).toBe(
+        '/ja/',
+      )
+    } finally {
+      router.dispose()
     }
   })
 })

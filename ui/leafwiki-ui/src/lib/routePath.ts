@@ -47,80 +47,37 @@ export function stripBasePath(pathname: string): string | null {
   return null
 }
 
-/**
- * Builds the internal editor route for a wiki page path.
- *
- * Input may already be a browser pathname or a wiki path. The result is always
- * a router path without the configured browser base path.
- */
-export function buildEditUrl(pathname: string): string {
-  let p = stripBasePath(pathname)
-  if (p === null) return `/e${ensureLeadingSlash(pathname)}`
-  if (p.startsWith('/e/')) return p
-  if (p.startsWith('/')) {
-    p = p.slice(1)
-  }
+/** Japanese wiki URL prefix; this is routing, not a database path segment. */
+export const WIKI_ROOT = '/ja/'
 
-  return `/e/${p}`
+/** Convert a domain path (including a literal `ja` slug) to a viewer URL. */
+export function buildViewUrl(path: string): string {
+  return WIKI_ROOT + path.replace(/^\/+/, '')
 }
 
-/**
- * Builds the internal history route for a wiki page path.
- *
- * Input may already be a browser pathname or a wiki path. The result is always
- * a router path without the configured browser base path.
- */
-export function buildHistoryUrl(pathname: string): string {
-  let p = stripBasePath(pathname)
-  if (p === null) return `/history${ensureLeadingSlash(pathname)}`
-  if (p === '/history' || p === '/history/') return '/history/'
-  if (p.startsWith('/history/')) return p
-  if (p.startsWith('/')) {
-    p = p.slice(1)
+/** Extract a domain path from a browser/router URL. */
+export function routeToWikiPath(pathname: string): string {
+  const path = stripBasePath(pathname) ?? ensureLeadingSlash(pathname)
+  for (const prefix of ['/ja/e', '/ja/history', '/ja']) {
+    if (path === prefix || path === prefix + '/') return '/'
+    if (path.startsWith(prefix + '/')) return path.slice(prefix.length)
   }
-
-  return `/history/${p}`
+  return path
 }
 
-/**
- * Builds the internal permalink route for a page.
- *
- * The slug segment is decorative and may become stale after rename/move.
- */
+export function buildEditUrl(path: string): string {
+  return '/ja/e/' + path.replace(/^\/+/, '')
+}
+
+export function buildHistoryUrl(path: string): string {
+  return '/ja/history/' + path.replace(/^\/+/, '')
+}
+
 export function buildPermalinkPath(id: string, slug?: string): string {
-  const encodedID = encodeURIComponent(id)
-  const normalizedSlug = slug?.trim()
-
-  if (!normalizedSlug) {
-    return `/p/${encodedID}`
-  }
-
-  return `/p/${encodedID}/${encodeURIComponent(normalizedSlug)}`
+  const path = '/ja/p/' + encodeURIComponent(id)
+  return slug?.trim() ? path + '/' + encodeURIComponent(slug.trim()) : path
 }
 
-/**
- * Builds the browser URL for the editor, including the configured base path.
- */
 export function buildBrowserEditUrl(pathname: string): string {
-  const normalized = ensureLeadingSlash(pathname)
-  if (normalized.startsWith('/e/')) {
-    return withBasePath(normalized)
-  }
   return withBasePath(buildEditUrl(pathname))
-}
-
-/**
- * Converts a router pathname back to the viewer route.
- *
- * This removes the configured base path and strips the `/e/` editor prefix when
- * present. The result is still a router/view route path, not a lookup key.
- */
-export function buildViewUrl(pathname: string): string {
-  const stripped = stripBasePath(pathname)
-  pathname = stripped ?? ensureLeadingSlash(pathname)
-
-  if (pathname.startsWith('/e/')) return pathname.slice(3)
-  if (pathname === '/history' || pathname === '/history/') return '/'
-  if (pathname.startsWith('/history/')) return pathname.slice('/history'.length)
-  return pathname
 }

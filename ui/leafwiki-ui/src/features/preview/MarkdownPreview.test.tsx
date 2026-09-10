@@ -241,7 +241,7 @@ describe('MarkdownPreview wikilinks with a slash in the title', () => {
     )
 
     const link = container.querySelector(
-      'a[href="/ai-gen-infos/adr/adr-0011-smtp"]',
+      'a[href="/ja/ai-gen-infos/adr/adr-0011-smtp"]',
     )
     expect(link).not.toBeNull()
     expect(link?.textContent).toBe(

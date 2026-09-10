@@ -427,6 +427,6 @@ test.describe('History', () => {
     await expect(
       page.locator('button[data-testid^="history-sidebar-revision-"]').first(),
     ).toBeVisible();
-    await expect.poll(() => new URL(page.url()).pathname).toContain(`/history/${renamedTitle}`);
+    await expect.poll(() => new URL(page.url()).pathname).toContain(`/ja/history/${renamedTitle}`);
   });
 });

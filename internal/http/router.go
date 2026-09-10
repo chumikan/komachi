@@ -279,11 +279,7 @@ func NewRouter(registrars []RouteRegistrar, frontendCfg FrontendConfig, opts Rou
 				}
 			}
 
-			if c.Request.Method == http.MethodGet &&
-				!strings.HasPrefix(path, "/api") &&
-				!strings.HasPrefix(path, "/assets") &&
-				!strings.HasPrefix(path, "/static") &&
-				!strings.HasPrefix(path, "/branding") {
+			if c.Request.Method == http.MethodGet && isFrontendRoute(path) {
 
 				c.Writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 				data, err := fs.ReadFile(fsys, "index.html")
@@ -382,4 +378,20 @@ func injectIntoHead(html, snippet string) string {
 		slog.Default().Warn("could not inject code into header", "reason", "</head> tag not found")
 	}
 	return newHTML
+}
+
+// Wiki URLs use /ja; API/assets and existing system routes keep their paths.
+// Unknown unprefixed slugs are not served as legacy wiki routes.
+func isFrontendRoute(path string) bool {
+	if path == "/" || path == "/ja" || strings.HasPrefix(path, "/ja/") {
+		return true
+	}
+	if path == "/settings" || strings.HasPrefix(path, "/settings/") {
+		return true
+	}
+	switch strings.TrimSuffix(path, "/") {
+	case "/login", "/users", "/forgot-password", "/reset-password", "/accept-invite":
+		return true
+	}
+	return false
 }

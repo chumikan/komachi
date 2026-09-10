@@ -36,10 +36,10 @@ describe('toWikiLookupPath', () => {
 
 describe('getWikiTargetRoutePath', () => {
   it('maps edit and history routes back to the view path', () => {
-    expect(getWikiTargetRoutePath('/e/docs/guide')).toBe('/docs/guide')
-    expect(getWikiTargetRoutePath('/history/docs/guide')).toBe('/docs/guide')
-    expect(getWikiTargetRoutePath('/history')).toBe('/')
-    expect(getWikiTargetRoutePath('/docs/guide')).toBe('/docs/guide')
+    expect(getWikiTargetRoutePath('/ja/e/docs/guide')).toBe('/docs/guide')
+    expect(getWikiTargetRoutePath('/ja/history/docs/guide')).toBe('/docs/guide')
+    expect(getWikiTargetRoutePath('/ja/history')).toBe('/')
+    expect(getWikiTargetRoutePath('/ja/docs/guide')).toBe('/docs/guide')
   })
 })
 
@@ -72,29 +72,29 @@ describe('getParentWikiRoutePath', () => {
 
 describe('getDeleteRedirectRoutePath', () => {
   it('redirects to the parent when the deleted page is open', () => {
-    expect(getDeleteRedirectRoutePath('/docs/guide', '/docs/guide')).toBe(
-      '/docs',
+    expect(getDeleteRedirectRoutePath('/ja/docs/guide', '/docs/guide')).toBe(
+      '/ja/docs',
     )
   })
 
   it('redirects from editor and history routes for the deleted page', () => {
-    expect(getDeleteRedirectRoutePath('/e/docs/guide', '/docs/guide')).toBe(
-      '/docs',
+    expect(getDeleteRedirectRoutePath('/ja/e/docs/guide', '/docs/guide')).toBe(
+      '/ja/docs',
     )
     expect(
-      getDeleteRedirectRoutePath('/history/docs/guide', '/docs/guide'),
-    ).toBe('/docs')
+      getDeleteRedirectRoutePath('/ja/history/docs/guide', '/docs/guide'),
+    ).toBe('/ja/docs')
   })
 
   it('redirects to the parent when a nested route under the deleted page is open', () => {
-    expect(getDeleteRedirectRoutePath('/docs/guide/setup', '/docs/guide')).toBe(
-      '/docs',
-    )
+    expect(
+      getDeleteRedirectRoutePath('/ja/docs/guide/setup', '/docs/guide'),
+    ).toBe('/ja/docs')
   })
 
   it('keeps the current route when another page is open', () => {
-    expect(getDeleteRedirectRoutePath('/docs/other', '/docs/guide')).toBe(
-      '/docs/other',
+    expect(getDeleteRedirectRoutePath('/ja/docs/other', '/docs/guide')).toBe(
+      '/ja/docs/other',
     )
   })
 })

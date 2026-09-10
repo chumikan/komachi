@@ -1,3 +1,4 @@
+import { buildEditUrl, buildViewUrl, routeToWikiPath } from '@/lib/routePath'
 import Page404 from '@/components/Page404'
 import { formatRelativeTime } from '@/lib/formatDate'
 import {
@@ -77,10 +78,10 @@ export default function PageViewer() {
     }, []),
     editPage: useCallback(() => {
       clearViewer()
-      navigate(`/e/${page?.path || ''}`)
+      navigate(buildEditUrl(page?.path || ''))
     }, [page, navigate, clearViewer]),
     showHistory: useCallback(() => {
-      navigate(buildHistoryUrl(page?.path || pathname), {
+      navigate(buildHistoryUrl(page?.path || routeToWikiPath(pathname)), {
         state: createNavigationVisitState(),
       })
     }, [navigate, page, pathname]),
@@ -91,7 +92,7 @@ export default function PageViewer() {
     deletePage: useCallback(() => {
       openDialog(DIALOG_DELETE_PAGE_CONFIRMATION, {
         pageId: page?.id,
-        redirectTo: getParentWikiRoutePath(page?.path || '/'),
+        redirectTo: buildViewUrl(getParentWikiRoutePath(page?.path || '/')),
       })
     }, [page, openDialog]),
     copyPage: useCallback(() => {
@@ -119,7 +120,7 @@ export default function PageViewer() {
   useSetPageTitle({ page })
 
   useEffect(() => {
-    const path = toWikiLookupPath(pathname)
+    const path = toWikiLookupPath(routeToWikiPath(pathname))
     loadPageData?.(path)
   }, [pathname, loadPageData])
 

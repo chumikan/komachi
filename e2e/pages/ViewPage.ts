@@ -66,7 +66,7 @@ export default class ViewPage {
   }
 
   async goto(pagePath: string = '/') {
-    await this.page.goto(toAppPath(pagePath));
+    await this.page.goto(toAppPath(`/ja/${pagePath.replace(/^\/+/, '')}`));
     await this.page.locator('article').waitFor({ state: 'visible' });
   }
 

@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import { TreeViewActionButton } from '@/features/tree/TreeViewActionButton'
 import { NODE_KIND_SECTION, PageNode } from '@/lib/api/pages'
 import { DIALOG_ADD_PAGE } from '@/lib/registries'
@@ -83,7 +84,7 @@ export const TreeNode = React.memo(function TreeNode({ node }: Props) {
   const linkText = (
     <div className={clsx('flex', 'tree-node__tooltip-parent')}>
       <Link
-        to={`/${node.path}`}
+        to={buildViewUrl(node.path)}
         state={createNavigationVisitState()}
         className="tree-node__link"
         data-testid={`tree-node-link-${node.id}`}

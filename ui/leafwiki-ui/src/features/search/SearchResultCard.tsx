@@ -1,7 +1,7 @@
 import i18next from '@/lib/i18n'
 import { SearchResultItem } from '@/lib/api/search'
 import { createNavigationVisitState } from '@/lib/navigationVisit'
-import { buildViewUrl } from '@/lib/routePath'
+import { routeToWikiPath, buildViewUrl } from '@/lib/routePath'
 import { normalizeWikiRoutePath } from '@/lib/wikiPath'
 import { forwardRef } from 'react'
 import { Link, useLocation } from 'react-router'
@@ -28,10 +28,10 @@ const SearchResultCard = forwardRef<HTMLAnchorElement, SearchResultCardProps>(
       (state) => state.page?.id ?? state.initialPage?.id,
     )
     const currentViewPath = normalizeWikiRoutePath(
-      buildViewUrl(location.pathname),
+      routeToWikiPath(location.pathname),
     )
     const resultPath = normalizeWikiRoutePath(item.path)
-    const resultUrl = `${resultPath}${location.search}`
+    const resultUrl = `${buildViewUrl(resultPath)}${location.search}`
     const isRouteActive = currentViewPath === resultPath
     const isEditorActive = currentEditorPageId === item.page_id
     const isActive = isRouteActive || isEditorActive || isSelected

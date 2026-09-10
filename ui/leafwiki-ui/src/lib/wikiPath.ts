@@ -1,4 +1,4 @@
-import { buildViewUrl } from './routePath'
+import { buildViewUrl, routeToWikiPath } from './routePath'
 
 /**
  * Wiki-domain path helpers.
@@ -47,12 +47,12 @@ export function toWikiLookupPath(path: string): string {
  * Converts any supported route variant to the normalized wiki route/path.
  *
  * Examples:
- * - `/docs` -> `/docs`
- * - `/e/docs` -> `/docs`
- * - `/history/docs` -> `/docs`
+ * - `/ja/docs` -> `/docs`
+ * - `/ja/e/docs` -> `/docs`
+ * - `/ja/history/docs` -> `/docs`
  */
 export function getWikiTargetRoutePath(pathname: string): string {
-  return normalizeWikiRoutePath(buildViewUrl(pathname))
+  return normalizeWikiRoutePath(routeToWikiPath(pathname))
 }
 
 /**
@@ -104,7 +104,9 @@ export function getDeleteRedirectRoutePath(
   deletedPagePath: string,
 ): string {
   const currentRoutePath = normalizeWikiRoutePath(currentLocationPath)
-  const currentViewPath = normalizeWikiRoutePath(buildViewUrl(currentRoutePath))
+  const currentViewPath = normalizeWikiRoutePath(
+    routeToWikiPath(currentRoutePath),
+  )
   const deletedRoutePath = normalizeWikiRoutePath(deletedPagePath)
 
   const isDeletedRouteActive =
@@ -112,7 +114,7 @@ export function getDeleteRedirectRoutePath(
     currentViewPath.startsWith(`${deletedRoutePath}/`)
 
   if (isDeletedRouteActive) {
-    return getParentWikiRoutePath(deletedRoutePath)
+    return buildViewUrl(getParentWikiRoutePath(deletedRoutePath))
   }
 
   return currentRoutePath

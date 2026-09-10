@@ -1,7 +1,7 @@
 import i18next from '@/lib/i18n'
 import { TaggedPage } from '@/lib/api/tags'
 import { createNavigationVisitState } from '@/lib/navigationVisit'
-import { buildViewUrl } from '@/lib/routePath'
+import { routeToWikiPath, buildViewUrl } from '@/lib/routePath'
 import { normalizeWikiRoutePath } from '@/lib/wikiPath'
 import { MouseEvent, forwardRef } from 'react'
 import { Link, useLocation } from 'react-router'
@@ -32,7 +32,7 @@ const TagsResultCard = forwardRef<HTMLDivElement, TagsResultCardProps>(
       (state: PageEditorState) => state.page?.id ?? state.initialPage?.id,
     )
     const currentViewPath = normalizeWikiRoutePath(
-      buildViewUrl(location.pathname),
+      routeToWikiPath(location.pathname),
     )
     const resultPath = normalizeWikiRoutePath(`/${item.path}`)
     const isRouteActive = currentViewPath === resultPath
@@ -62,7 +62,7 @@ const TagsResultCard = forwardRef<HTMLDivElement, TagsResultCardProps>(
         } ${isRouteActive ? 'search-result-card--route-active' : ''}`.trim()}
       >
         <Link
-          to={`/${item.path}`}
+          to={buildViewUrl(item.path)}
           state={createNavigationVisitState()}
           aria-current={isRouteActive ? 'page' : undefined}
           className="tags-result-card__link"

@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import { useAppMode } from '@/lib/useAppMode'
 import { createNavigationVisitState } from '@/lib/navigationVisit'
 import { useTreeStore } from '@/stores/tree'
@@ -52,7 +53,7 @@ export default function Breadcrumbs() {
               <span className="breadcrumbs-nav__current">{crumb.title}</span>
             ) : (
               <Link
-                to={crumb.path}
+                to={buildViewUrl(crumb.path)}
                 state={createNavigationVisitState()}
                 className="breadcrumbs-nav__link"
               >

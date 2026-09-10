@@ -7,7 +7,12 @@ import {
   DIALOG_CREATE_PAGE_BY_PATH,
   DIALOG_WIKILINK_DISAMBIGUATION,
 } from '@/lib/registries'
-import { buildViewUrl, stripBasePath, withBasePath } from '@/lib/routePath'
+import {
+  routeToWikiPath,
+  buildViewUrl,
+  stripBasePath,
+  withBasePath,
+} from '@/lib/routePath'
 import {
   normalizeWikiRoutePath,
   resolveWikiLinkPath,
@@ -73,7 +78,7 @@ export function MarkdownLink({
     if (stripped !== null) {
       locationPath = stripped
     }
-    return normalizeWikiRoutePath(props.path ?? buildViewUrl(locationPath))
+    return normalizeWikiRoutePath(props.path ?? routeToWikiPath(locationPath))
   }
 
   if (href === undefined) {
@@ -224,7 +229,7 @@ export function MarkdownLink({
 
     return (
       <Link
-        to={normalizedHref}
+        to={buildViewUrl(normalizedHref)}
         state={createNavigationVisitState()}
         {...props}
         className="no-underline hover:underline"

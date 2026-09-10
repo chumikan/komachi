@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,7 @@ export function WikiLinkDisambiguationDialog({
 
   const handleSelect = (path: string) => {
     openAncestorsForPath(path)
-    navigate(`/${path}`, { state: createNavigationVisitState() })
+    navigate(buildViewUrl(path), { state: createNavigationVisitState() })
     closeDialog()
   }
 

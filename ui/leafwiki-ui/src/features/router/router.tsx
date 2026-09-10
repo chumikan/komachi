@@ -73,6 +73,10 @@ export const createLeafWikiRouter = (
       },
       {
         path: '/',
+        element: <Navigate to="/ja/" replace />,
+      },
+      {
+        path: '/ja/',
         element: isReadOnlyViewer ? (
           <ReadOnlyWrapper>
             <RootRedirect />
@@ -112,7 +116,7 @@ export const createLeafWikiRouter = (
         ],
       },
       {
-        path: '/e/*',
+        path: '/ja/e/*',
         element: isReadOnlyViewer ? (
           <Navigate to="/" />
         ) : (
@@ -122,7 +126,7 @@ export const createLeafWikiRouter = (
         ),
       },
       {
-        path: '/history/*',
+        path: '/ja/history/*',
         element: !enableRevision ? (
           <Navigate to="/" replace />
         ) : isReadOnlyViewer ? (
@@ -136,7 +140,7 @@ export const createLeafWikiRouter = (
         ),
       },
       {
-        path: '/p/:id/:slug?',
+        path: '/ja/p/:id/:slug?',
         element: isReadOnlyViewer ? (
           <ReadOnlyWrapper>
             <PermalinkRedirect />
@@ -148,7 +152,7 @@ export const createLeafWikiRouter = (
         ),
       },
       {
-        path: '*',
+        path: '/ja/*',
         element: isReadOnlyViewer ? (
           <ReadOnlyWrapper>
             <PageViewer />
@@ -159,6 +163,7 @@ export const createLeafWikiRouter = (
           </AuthWrapper>
         ),
       },
+      { path: '*', element: <div role="alert">404</div> },
     ] satisfies RouteObject[],
     { basename: basename || undefined },
   )

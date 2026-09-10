@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import { useConfigStore } from '@/stores/config'
 import { createNavigationVisitState } from '@/lib/navigationVisit'
 import i18next from '@/lib/i18n'
@@ -61,7 +62,10 @@ export function BacklinkInfo() {
             <ul>
               {backlinks.map((bl) => (
                 <li key={bl.from_page_id} className="backlinks__item">
-                  <Link to={bl.from_path} state={createNavigationVisitState()}>
+                  <Link
+                    to={buildViewUrl(bl.from_path)}
+                    state={createNavigationVisitState()}
+                  >
                     <Paperclip size={16} className="backlinks__icon" />{' '}
                     {bl.from_title}
                   </Link>
@@ -128,7 +132,7 @@ export function BacklinkInfo() {
                           className="backlinks__item backlinks__item--broken"
                         >
                           <Link
-                            to={bl.from_path}
+                            to={buildViewUrl(bl.from_path)}
                             state={createNavigationVisitState()}
                           >
                             <Link2Off size={16} className="backlinks__icon" />{' '}

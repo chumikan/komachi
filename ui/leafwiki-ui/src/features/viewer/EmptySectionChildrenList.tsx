@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import { Button } from '@/components/ui/button'
 import { NODE_KIND_PAGE, NODE_KIND_SECTION, Page } from '@/lib/api/pages'
 import i18next from '@/lib/i18n'
@@ -79,7 +80,10 @@ export default function EmptySectionChildrenList({
 
               return (
                 <li key={n.id}>
-                  <Link to={`/${n.path}`} state={createNavigationVisitState()}>
+                  <Link
+                    to={buildViewUrl(n.path)}
+                    state={createNavigationVisitState()}
+                  >
                     {n.title}
                   </Link>{' '}
                   {n.kind === NODE_KIND_SECTION &&

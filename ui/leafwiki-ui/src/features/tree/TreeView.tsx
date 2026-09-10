@@ -12,7 +12,7 @@ import { ApiLocalizedError, mapApiError } from '@/lib/api/errors'
 import { triggerPull } from '@/lib/api/backup'
 import { NODE_KIND_PAGE, NODE_KIND_SECTION } from '@/lib/api/pages'
 import { DIALOG_ADD_PAGE, DIALOG_SORT_PAGES } from '@/lib/registries'
-import { buildViewUrl } from '@/lib/routePath'
+import { routeToWikiPath } from '@/lib/routePath'
 import { useAppMode } from '@/lib/useAppMode'
 import { useIsReadOnly } from '@/lib/useIsReadOnly'
 import { toWikiLookupPath } from '@/lib/wikiPath'
@@ -61,7 +61,7 @@ export default function TreeView() {
     (state) => state.page?.id ?? state.initialPage?.id,
   )
 
-  const currentPath = toWikiLookupPath(buildViewUrl(pathname))
+  const currentPath = toWikiLookupPath(routeToWikiPath(pathname))
 
   const pinnedPages = useTreeStore((s) => s.pinnedPages)
   const hasPinned = pinnedPages.length > 0

@@ -31,7 +31,7 @@ describe('ShortcutsDialog', () => {
 
   it('shows edit-mode shortcuts on an editor route', () => {
     render(
-      <MemoryRouter initialEntries={['/e/docs/getting-started']}>
+      <MemoryRouter initialEntries={['/ja/e/docs/getting-started']}>
         <ShortcutsDialog />
       </MemoryRouter>,
     )
@@ -45,7 +45,7 @@ describe('ShortcutsDialog', () => {
 
   it('renders the current mode label via i18n', () => {
     render(
-      <MemoryRouter initialEntries={['/history/docs/getting-started']}>
+      <MemoryRouter initialEntries={['/ja/history/docs/getting-started']}>
         <ShortcutsDialog />
       </MemoryRouter>,
     )

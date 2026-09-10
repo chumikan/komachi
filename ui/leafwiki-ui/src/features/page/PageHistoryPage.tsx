@@ -1,5 +1,5 @@
 import Page404 from '@/components/Page404'
-import { buildViewUrl } from '@/lib/routePath'
+import { routeToWikiPath, buildViewUrl } from '@/lib/routePath'
 import {
   createNavigationVisitState,
   getNavigationVisitKey,
@@ -32,7 +32,7 @@ export default function PageHistoryPage() {
   usePageHistory(page?.id ?? null)
 
   const closeHistory = useCallback(() => {
-    navigate(buildViewUrl(page?.path || pathname), {
+    navigate(buildViewUrl(page?.path || routeToWikiPath(pathname)), {
       state: createNavigationVisitState(),
     })
   }, [navigate, page?.path, pathname])
@@ -41,7 +41,7 @@ export default function PageHistoryPage() {
   useSetPageTitle({ page })
 
   useEffect(() => {
-    const path = toWikiLookupPath(buildViewUrl(pathname))
+    const path = toWikiLookupPath(routeToWikiPath(pathname))
     void loadPageData?.(path)
   }, [pathname, loadPageData])
 

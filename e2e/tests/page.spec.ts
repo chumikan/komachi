@@ -932,7 +932,7 @@ async function expectMarkdownLinkAutocompleteWorks(page: import('@playwright/tes
   await editPage.savePage();
   await editPage.closeEditor();
 
-  const welcomeLink = page.locator(`article a[href="${toAppPath('/welcome-to-leafwiki')}"]`);
+  const welcomeLink = page.locator(`article a[href="${toAppPath('/ja/welcome-to-leafwiki')}"]`);
   await welcomeLink.getByText('Welcome').waitFor({ state: 'visible' });
 }
 
@@ -1050,7 +1050,7 @@ test.describe('Authenticated', () => {
     await addPageDialog.submitWithEnter();
 
     await treeView.expectNumberOfTreeNodes(curNodeCount + 1);
-    await expect(page).toHaveURL(new RegExp(`${toAppPath(`/e/${expectedSlug}`)}$`));
+    await expect(page).toHaveURL(new RegExp(`${toAppPath(`/ja/e/${expectedSlug}`)}$`));
   });
 
   test('create-subpage', async ({ page }) => {
@@ -1164,7 +1164,7 @@ test.describe('Authenticated', () => {
     await viewPage.clickPermalinkButton();
 
     const permalinkUrl = await viewPage.getPermalinkDialogUrl();
-    expect(permalinkUrl).toContain('/p/');
+    expect(permalinkUrl).toContain('/ja/p/');
     expect(permalinkUrl).toContain(childTitle);
 
     await viewPage.copyPermalinkFromDialog();
@@ -1197,14 +1197,14 @@ test.describe('Authenticated', () => {
       targetParentPath: targetParentTitle,
     });
 
-    await page.goto(toAppPath(`/${targetParentTitle}/${renamedChildTitle}`));
+    await page.goto(toAppPath(`/ja/${targetParentTitle}/${renamedChildTitle}`));
     await page.locator('article').waitFor({ state: 'visible' });
     await expect(page.locator('.breadcrumbs-nav__current')).toHaveText(renamedChildTitle);
 
     await page.goto(permalinkUrl);
     await expect
       .poll(() => new URL(page.url()).pathname)
-      .toBe(toAppPath(`/${targetParentTitle}/${renamedChildTitle}`));
+      .toBe(toAppPath(`/ja/${targetParentTitle}/${renamedChildTitle}`));
     await page.locator('article').waitFor({ state: 'visible' });
     await expect(page.locator('.breadcrumbs-nav__current')).toHaveText(renamedChildTitle);
   });
@@ -2220,7 +2220,7 @@ This paragraph creates a footnote reference.[^leafwiki]
     await expect(deleteDialog).toContainText(referrerTitle);
     await deleteDialog.getByRole('link', { name: referrerTitle }).click();
 
-    await expect.poll(() => new URL(page.url()).pathname).toBe(`/${referrerSlug}`);
+    await expect.poll(() => new URL(page.url()).pathname).toBe(`/ja/${referrerSlug}`);
     await expectMainScrollTop(page, 0);
   });
 
@@ -2247,7 +2247,7 @@ This paragraph creates a footnote reference.[^leafwiki]
     const editPage = new EditPage(page);
     await editPage.closeEditor();
 
-    await expect.poll(() => new URL(page.url()).pathname).toBe(`/${slug}`);
+    await expect.poll(() => new URL(page.url()).pathname).toBe(`/ja/${slug}`);
     await expectMainScrollTop(page, 0);
   });
 
@@ -2878,7 +2878,7 @@ Paragraph outside the list.
     const viewPage = new ViewPage(page);
 
     await viewPage.goto('/welcome-to-leafwiki');
-    await navigateWithinApp(page, `/e/${slug}`);
+    await navigateWithinApp(page, `/ja/e/${slug}`);
 
     await notfoundPage.expectVisible();
     await notfoundPage.expectCreatePageButtonHidden();
@@ -2890,7 +2890,7 @@ Paragraph outside the list.
     const viewPage = new ViewPage(page);
 
     await viewPage.goto('/welcome-to-leafwiki');
-    await navigateWithinApp(page, `/history/${slug}`);
+    await navigateWithinApp(page, `/ja/history/${slug}`);
 
     await notfoundPage.expectVisible();
     await notfoundPage.expectCreatePageButtonHidden();
@@ -2901,7 +2901,7 @@ Paragraph outside the list.
     const notfoundPage = new NotFoundPage(page);
     const missingId = `missing-permalink-${Date.now()}`;
 
-    await page.goto(toAppPath(`/p/${missingId}`));
+    await page.goto(toAppPath(`/ja/p/${missingId}`));
 
     await notfoundPage.expectVisible();
     await notfoundPage.expectCreatePageButtonHidden();
@@ -2951,8 +2951,8 @@ Paragraph outside the list.
       path: `${parentTitle}/${childTitle}`,
       targetParentPath: '',
     });
-    await page.goto(toAppPath(`/${childTitle}`));
-    await expect.poll(() => new URL(page.url()).pathname).toBe(`/${childTitle}`);
+    await page.goto(toAppPath(`/ja/${childTitle}`));
+    await expect.poll(() => new URL(page.url()).pathname).toBe(`/ja/${childTitle}`);
     await expect
       .poll(
         () =>
@@ -3017,10 +3017,10 @@ Paragraph outside the list.
       path: `${sourceParentTitle}/${childTitle}`,
       targetParentPath: targetParentTitle,
     });
-    await page.goto(toAppPath(`/${targetParentTitle}/${childTitle}`));
+    await page.goto(toAppPath(`/ja/${targetParentTitle}/${childTitle}`));
     await expect
       .poll(() => new URL(page.url()).pathname)
-      .toBe(`/${targetParentTitle}/${childTitle}`);
+      .toBe(`/ja/${targetParentTitle}/${childTitle}`);
     await expect(page.locator('article > h1')).toHaveText(childTitle);
   });
 
@@ -3057,10 +3057,10 @@ Paragraph outside the list.
       path: `${sourceParentTitle}/${childTitle}`,
       targetParentPath: targetParentTitle,
     });
-    await page.goto(toAppPath(`/e/${targetParentTitle}/${childTitle}`));
+    await page.goto(toAppPath(`/ja/e/${targetParentTitle}/${childTitle}`));
     await expect
       .poll(() => new URL(page.url()).pathname)
-      .toBe(`/e/${targetParentTitle}/${childTitle}`);
+      .toBe(`/ja/e/${targetParentTitle}/${childTitle}`);
     await expect(page.locator('.cm-editor')).toBeVisible();
   });
 
@@ -3171,14 +3171,14 @@ Paragraph outside the list.
       targetParentPath: '',
       rewriteLinks: true,
     });
-    await page.goto(toAppPath(`/${referrerTitle}`));
+    await page.goto(toAppPath(`/ja/${referrerTitle}`));
     await expect(page.locator('article').getByRole('link', { name: targetTitle })).toHaveAttribute(
       'href',
-      toAppPath(`/${targetTitle}`),
+      toAppPath(`/ja/${targetTitle}`),
     );
 
     await page.locator('article').getByRole('link', { name: targetTitle }).click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe(`/${targetTitle}`);
+    await expect.poll(() => new URL(page.url()).pathname).toBe(`/ja/${targetTitle}`);
     await expect(page.locator('article > h1')).toHaveText(targetTitle);
   });
 
@@ -3578,7 +3578,7 @@ Paragraph outside the list.
     const initialQuery = 'alpha-query';
     const updatedQuery = 'beta-query';
 
-    await page.goto(toAppPath(`/welcome-to-leafwiki?q=${initialQuery}`));
+    await page.goto(toAppPath(`/ja/welcome-to-leafwiki?q=${initialQuery}`));
 
     const viewPage = new ViewPage(page);
     await viewPage.switchToSearchTab();
@@ -3820,7 +3820,7 @@ Paragraph outside the list.
 
     await viewPage.openCurrentPageHistory();
 
-    await page.waitForURL(new RegExp('/history/' + parentTitle + '/' + childTitle + '$'));
+    await page.waitForURL(new RegExp('/ja/history/' + parentTitle + '/' + childTitle + '$'));
     await expect(page.getByTestId('page-history-page-content')).toBeVisible();
     await expect(page.getByTestId('page-history-page-content')).toContainText(childTitle);
     await expect(page.getByText('Error: Page not found')).toHaveCount(0);

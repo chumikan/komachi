@@ -1,3 +1,4 @@
+import { buildViewUrl, buildEditUrl } from '@/lib/routePath'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -229,7 +230,7 @@ export default function TreeNodeActionsMenu({
         const currentRouterPath =
           stripBasePath(currentRoutePath) ?? currentRoutePath
         if (currentRouterPath === `/${node.path}` && updatedPage?.path) {
-          navigate(`/${updatedPage.path}`)
+          navigate(buildViewUrl(updatedPage.path))
         }
 
         toast.success(
@@ -304,7 +305,7 @@ export default function TreeNodeActionsMenu({
             <DropdownMenuItem
               className="cursor-pointer"
               onClick={() => {
-                navigate(`/e/${node.path}`)
+                navigate(buildEditUrl(node.path))
               }}
             >
               <Pencil size={18} className="tree-node__action-icon" />{' '}
@@ -416,7 +417,7 @@ export default function TreeNodeActionsMenu({
                 const currentRouterPath =
                   stripBasePath(currentRoutePath) ?? currentRoutePath
                 const isCurrentlyEditedNode =
-                  currentRouterPath.startsWith('/e/') &&
+                  currentRouterPath.startsWith('/ja/e/') &&
                   currentEditorPageId === node.id
 
                 if (isCurrentlyEditedNode) {

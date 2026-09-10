@@ -1,3 +1,4 @@
+import { buildViewUrl } from '@/lib/routePath'
 import i18next from '@/lib/i18n'
 import { Trans } from 'react-i18next'
 import { ListView, ListViewList, ListViewStatus } from '@/components/ListView'
@@ -11,7 +12,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { searchPages, SearchResultItem, SearchTagFacet } from '@/lib/api/search'
 import { deferStateUpdate } from '@/lib/deferState'
-import { normalizeWikiRoutePath } from '@/lib/wikiPath'
 import { fetchTags, TagCount } from '@/lib/api/tags'
 import { useDebounce } from '@/lib/useDebounce'
 import { getShortcutDefinition } from '@/lib/shortcuts/shortcutCatalog'
@@ -284,7 +284,7 @@ export default function Search({ active = false }: SearchProps) {
     if (!activeResult) return
 
     navigate({
-      pathname: normalizeWikiRoutePath(activeResult.path),
+      pathname: buildViewUrl(activeResult.path),
       search: location.search,
     })
   }
