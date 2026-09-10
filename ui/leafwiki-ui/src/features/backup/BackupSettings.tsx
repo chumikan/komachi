@@ -16,6 +16,7 @@ export default function BackupSettings() {
   const {
     enabled,
     envManaged,
+    unavailableReason,
     bootError,
     lastBackupAt,
     lastError,
@@ -109,7 +110,7 @@ export default function BackupSettings() {
             </span>
           ) : (
             <span className="settings__role-pill settings__role-pill--default">
-              {t('statusDisabled')}
+              {t(unavailableReason ? 'statusUnavailable' : 'statusDisabled')}
             </span>
           )}
         </div>
@@ -184,7 +185,11 @@ export default function BackupSettings() {
           </div>
         )}
 
-        {envManaged && (
+        {unavailableReason && (
+          <p className="settings__hint">{unavailableReason}</p>
+        )}
+
+        {envManaged && !unavailableReason && (
           <p className="settings__hint">{t('config.envManagedHint')}</p>
         )}
       </div>
@@ -213,7 +218,7 @@ export default function BackupSettings() {
       )}
 
       {/* Configuration form (settings-managed only) */}
-      {!envManaged && <BackupConfigForm />}
+      {!envManaged && !unavailableReason && <BackupConfigForm />}
     </div>
   )
 }

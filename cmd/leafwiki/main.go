@@ -302,7 +302,7 @@ func runServerCommand(ctx context.Context, cmd *cli.Command, cfg *serverConfig) 
 		}
 	}()
 
-	// Initialize git backup (env-managed vs settings-managed — see buildBackupManager).
+	// Legacy filesystem Git backup does not support PostgreSQL page content.
 	backupManager := backup.NewPostgresUnavailableManager()
 	defer backupManager.Stop()
 	w.SetBackupRoutes(wikibackup.NewRoutes(backupManager, w.AuthService()))

@@ -1,4 +1,5 @@
 {
+  "statusUnavailable": "Nicht verfügbar",
   "pageTitle": "Git-Inhaltssicherung",
   "loadStatusErrorFallback": "Sicherungsstatus konnte nicht geladen werden",
   "pageDescription": "Sichert den Inhalt der Wiki-Seiten in ein Git-Repository. Dies umfasst nur Inhalte und beinhaltet keine vollständige Systemwiederherstellung.",

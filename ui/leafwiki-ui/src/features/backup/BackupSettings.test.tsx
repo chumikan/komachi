@@ -68,4 +68,19 @@ describe('BackupSettings', () => {
     expect(screen.getByText('config.envManagedHint')).toBeInTheDocument()
     expect(screen.queryByTestId('backup-config-form')).not.toBeInTheDocument()
   })
+  it('explains an unsupported runtime without configuration controls or errors', () => {
+    storeState = makeState({
+      enabled: false,
+      unavailableReason: 'PostgreSQL requires Full Backup snapshots.',
+    })
+    render(<BackupSettings />)
+    expect(screen.getByText('statusUnavailable')).toBeInTheDocument()
+    expect(
+      screen.getByText('PostgreSQL requires Full Backup snapshots.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('config.envManagedHint')).not.toBeInTheDocument()
+    expect(screen.queryByText('config.bootErrorLabel')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('backup-config-form')).not.toBeInTheDocument()
+    expect(screen.queryByText('pushNow')).not.toBeInTheDocument()
+  })
 })

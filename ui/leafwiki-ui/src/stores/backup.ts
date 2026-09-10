@@ -33,6 +33,7 @@ interface BackupState {
   stopPolling: () => void
 
   // Settings-mode configuration.
+  unavailableReason: string
   envManaged: boolean
   bootError: string
   configAvailable: boolean
@@ -59,6 +60,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
   pollingFromAt: null,
   statusError: '',
 
+  unavailableReason: '',
   envManaged: false,
   bootError: '',
   configAvailable: false,
@@ -76,6 +78,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
     try {
       const data: BackupStatusResponse = await fetchBackupStatus()
       set({
+        unavailableReason: data.unavailableReason ?? '',
         enabled: data.enabled,
         envManaged: data.envManaged ?? get().envManaged,
         bootError: data.bootError ?? '',
@@ -118,6 +121,7 @@ export const useBackupStore = create<BackupState>((set, get) => ({
       const res = await fetchBackupConfig()
       set({
         configLoading: false,
+        unavailableReason: res.unavailableReason ?? '',
         configAvailable: res.available,
         envManaged: res.envManaged ?? false,
         enabled: res.enabled ?? get().enabled,

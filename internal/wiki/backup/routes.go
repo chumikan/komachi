@@ -61,8 +61,9 @@ func (r *Routes) handleGetBackupStatus(c *gin.Context) {
 		return
 	}
 	body := gin.H{
-		"enabled":    r.mgr.Enabled(),
-		"envManaged": r.mgr.EnvManaged(),
+		"enabled":           r.mgr.Enabled(),
+		"envManaged":        r.mgr.EnvManaged(),
+		"unavailableReason": r.mgr.UnavailableReason(),
 	}
 	if snap, running := r.mgr.Status(); running {
 		body["status"] = snap
@@ -77,7 +78,7 @@ func (r *Routes) handleGetBackupStatus(c *gin.Context) {
 // A configured-but-not-starting backup (BootError) also counts as an error so
 // the indicator surfaces it.
 func (r *Routes) handleGetBackupAlert(c *gin.Context) {
-	if r.mgr == nil {
+	if r.mgr == nil || r.mgr.UnavailableReason() != "" {
 		c.JSON(http.StatusOK, gin.H{"needsIntervention": false, "hasError": false})
 		return
 	}
@@ -92,7 +93,7 @@ func (r *Routes) handleGetBackupAlert(c *gin.Context) {
 }
 
 func (r *Routes) handleTriggerBackup(c *gin.Context) {
-	if r.mgr == nil {
+	if r.mgr == nil || r.mgr.UnavailableReason() != "" {
 		r.respondNotEnabled(c)
 		return
 	}
@@ -104,7 +105,7 @@ func (r *Routes) handleTriggerBackup(c *gin.Context) {
 }
 
 func (r *Routes) handleForcePush(c *gin.Context) {
-	if r.mgr == nil {
+	if r.mgr == nil || r.mgr.UnavailableReason() != "" {
 		r.respondNotEnabled(c)
 		return
 	}
@@ -120,7 +121,7 @@ func (r *Routes) handleForcePush(c *gin.Context) {
 }
 
 func (r *Routes) handleTriggerPull(c *gin.Context) {
-	if r.mgr == nil {
+	if r.mgr == nil || r.mgr.UnavailableReason() != "" {
 		r.respondNotEnabled(c)
 		return
 	}
@@ -159,6 +160,10 @@ type backupConfigRequest struct {
 }
 
 func (r *Routes) handleGetBackupConfig(c *gin.Context) {
+	if r.mgr != nil && r.mgr.UnavailableReason() != "" {
+		c.JSON(http.StatusOK, gin.H{"available": false, "enabled": false, "envManaged": false, "unavailableReason": r.mgr.UnavailableReason()})
+		return
+	}
 	if r.mgr == nil {
 		c.JSON(http.StatusOK, gin.H{"available": false})
 		return
@@ -170,9 +175,10 @@ func (r *Routes) handleGetBackupConfig(c *gin.Context) {
 		slog.Warn("backup: could not read current config for settings", "error", err)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"available":  true,
-		"envManaged": r.mgr.EnvManaged(),
-		"enabled":    r.mgr.Enabled(),
+		"available":         true,
+		"envManaged":        r.mgr.EnvManaged(),
+		"unavailableReason": r.mgr.UnavailableReason(),
+		"enabled":           r.mgr.Enabled(),
 		// Wire name kept as encryptionKeyAvailable; server-side this is
 		// Manager.CredentialsEncrypted() ("are saved credentials encrypted at
 		// rest"). It only drives an informational note, never any gating.
@@ -231,7 +237,7 @@ func (r *Routes) handleTestBackupConfig(c *gin.Context) {
 }
 
 func (r *Routes) handleDisableBackup(c *gin.Context) {
-	if r.mgr == nil {
+	if r.mgr == nil || r.mgr.UnavailableReason() != "" {
 		r.respondNotEnabled(c)
 		return
 	}
@@ -251,7 +257,7 @@ func (r *Routes) handleDisableBackup(c *gin.Context) {
 // "keep existing" secrets from the stored config, applies defaults, and runs
 // Config.ValidateForSettings. It writes the error response itself on failure.
 func (r *Routes) bindAndValidateConfig(c *gin.Context) (backupSvc.Config, bool) {
-	if r.mgr == nil {
+	if r.mgr == nil || r.mgr.UnavailableReason() != "" {
 		r.respondNotEnabled(c)
 		return backupSvc.Config{}, false
 	}

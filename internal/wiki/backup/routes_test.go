@@ -489,3 +489,44 @@ func testEd25519PEM(t *testing.T) string {
 	}
 	return string(pem.EncodeToMemory(block))
 }
+
+func TestPostgresBackupUnavailable(t *testing.T) {
+	mgr := backupSvc.NewPostgresUnavailableManager()
+	defer mgr.Stop()
+	if mgr.EnvManaged() || mgr.Configured() || mgr.BootError() != nil {
+		t.Fatal("unsupported runtime must not claim an environment configuration or boot failure")
+	}
+	if err := mgr.Reconfigure(backupSvc.Config{}); err != backupSvc.ErrNotRunning {
+		t.Fatalf("Reconfigure: %v", err)
+	}
+	if err := mgr.Disable(); err != backupSvc.ErrNotRunning {
+		t.Fatalf("Disable: %v", err)
+	}
+	routes := &Routes{mgr: mgr}
+	for _, handler := range []func(*gin.Context){routes.handleGetBackupStatus, routes.handleGetBackupConfig} {
+		c, rec := newTestGinContext()
+		handler(c)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != http.StatusOK || body["enabled"] != false || body["envManaged"] != false || body["unavailableReason"] != mgr.UnavailableReason() || body["bootError"] != nil {
+			t.Fatalf("unexpected response: %s", rec.Body.String())
+		}
+		if available, ok := body["available"]; ok && available != false {
+			t.Fatal("configuration must be unavailable")
+		}
+	}
+	c, rec := newTestGinContext()
+	routes.handleGetBackupAlert(c)
+	if rec.Body.String() != `{"hasError":false,"needsIntervention":false}` {
+		t.Fatalf("unsupported runtime must not trigger backup alerts: %s", rec.Body.String())
+	}
+	for _, handler := range []func(*gin.Context){routes.handleSaveBackupConfig, routes.handleTestBackupConfig, routes.handleDisableBackup, routes.handleTriggerBackup, routes.handleForcePush, routes.handleTriggerPull} {
+		c, rec := newTestGinContext()
+		handler(c)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected unavailable, got %d: %s", rec.Code, rec.Body.String())
+		}
+	}
+}

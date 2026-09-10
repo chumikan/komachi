@@ -18,7 +18,8 @@ var ErrNotRunning = errors.New("git backup is not enabled")
 // Manager owns the git backup Repository + Scheduler and, in settings mode,
 // lets an admin reconfigure them at runtime without restarting the server.
 //
-// Three shapes:
+// Runtime modes:
+//   - unavailable: PostgreSQL runtime; no Git operations or configuration.
 //   - env-managed: built from flags/env in cmd/leafwiki. cfg is fixed;
 //     Reconfigure/Disable return ErrEnvManaged. Historical behaviour, unchanged.
 //   - settings-managed, active: booted from git-backup.json or configured via
@@ -43,17 +44,20 @@ type Manager struct {
 	closed  bool        // Stop() has run; a still-in-flight background boot must not activate
 
 	// Immutable after construction:
-	envManaged bool
-	store      *ConfigStore // nil when envManaged
-	rootDir    string
-	assetsDir  string
+	unavailableReason string
+	envManaged        bool
+	store             *ConfigStore // nil when envManaged
+	rootDir           string
+	assetsDir         string
 }
 
-// PostgreSQL runtime must not present a filesystem-only Git archive as a full
-// backup. Keep legacy constructors for legacy tools/tests; never start Git here.
+// PostgreSQL runtime must not archive legacy files as current page content. Keep legacy constructors for legacy tools/tests; never start Git here.
 func NewPostgresUnavailableManager() *Manager {
-	return &Manager{envManaged: true, bootErr: errors.New("Git backup only covers legacy filesystem content and is unavailable for PostgreSQL runtime; use Full Backup snapshots")}
+	return &Manager{unavailableReason: "Git content backup is not supported for PostgreSQL storage. Changing environment variables will not enable it. Use Full Backup snapshots to back up this instance."}
 }
+
+// UnavailableReason describes an unsupported runtime, separately from configuration failures.
+func (m *Manager) UnavailableReason() string { return m.unavailableReason }
 
 // NewEnvManager wraps an already-built repo + scheduler produced by the
 // CLI/env path in cmd/leafwiki.
@@ -186,6 +190,9 @@ func (m *Manager) snapshot() (*Repository, *Scheduler) {
 // later fix + restart picks it up, the running backup is left stopped, and the
 // error is returned.
 func (m *Manager) Reconfigure(cfg Config) error {
+	if m.unavailableReason != "" {
+		return ErrNotRunning
+	}
 	if m.envManaged {
 		return ErrEnvManaged
 	}
@@ -216,6 +223,9 @@ func (m *Manager) Reconfigure(cfg Config) error {
 // keeping the remote/credentials so it can be re-enabled without re-entering
 // everything.
 func (m *Manager) Disable() error {
+	if m.unavailableReason != "" {
+		return ErrNotRunning
+	}
 	if m.envManaged {
 		return ErrEnvManaged
 	}

@@ -11,6 +11,7 @@ const BACKUP_DISABLE_URL = '/api/admin/backup/disable'
 
 export interface BackupStatusResponse {
   enabled: boolean
+  unavailableReason?: string
   envManaged?: boolean
   bootError?: string
   status?: {
@@ -42,6 +43,7 @@ export interface BackupConfig {
 
 export interface BackupConfigResponse {
   available: boolean
+  unavailableReason?: string
   envManaged?: boolean
   enabled?: boolean
   encryptionKeyAvailable?: boolean

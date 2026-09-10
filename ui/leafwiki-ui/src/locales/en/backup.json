@@ -1,4 +1,5 @@
 {
+  "statusUnavailable": "Unavailable",
   "pageTitle": "Git Content Backup",
   "loadStatusErrorFallback": "Failed to load backup status",
   "pageDescription": "Back up wiki page content to a Git repository. This covers content only and does not include full system restore.",
