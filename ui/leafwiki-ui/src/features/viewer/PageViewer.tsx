@@ -16,7 +16,6 @@ import { getPageAttachments, type PageAttachment } from '@/lib/api/assets'
 import { pinPage } from '@/lib/api/pages'
 import { createHotkeyDefinition } from '@/lib/shortcuts/shortcutCatalog'
 import { useScrollRestoration } from '@/lib/useScrollRestoration'
-import { cn } from '@/lib/utils'
 import {
   getParentWikiRoutePath,
   getWikiTargetRoutePath,
@@ -30,7 +29,6 @@ import { useTreeStore } from '@/stores/tree'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router'
 import { BacklinkInfo } from '../links/LinkInfo'
 import { extractTocEntries } from '../preview/extractTocEntries'
@@ -167,13 +165,12 @@ export default function PageViewer() {
     }
   }, [page?.id])
 
-  const showTocButton = tocEntries.length > 3
+  const showTocButton = tocEntries.length > 0
   const showRightPane = showTocButton || attachments.length > 0
   // Single scroll spy for both the dropdown and the side panel.
   const tocActiveId = useTocScrollSpy(showTocButton ? tocEntries : [])
 
   const toggleTocCollapsed = useTocPanelStore((state) => state.toggleCollapsed)
-  const tocCollapsed = useTocPanelStore((state) => state.collapsed)
 
   useEffect(() => {
     if (!showRightPane) return
@@ -190,50 +187,38 @@ export default function PageViewer() {
   const editorName = displayUser(page?.metadata?.lastAuthor)
   const updatedRelative = formatRelativeTime(page?.metadata?.updatedAt)
   const showUpdated = updatedRelative
-  const subheaderRoot = document.getElementById('app-subheader-root')
-  const tocPaneRoot = document.getElementById('app-toc-pane-root')
-
-  const subheader =
-    page && !error && subheaderRoot
-      ? createPortal(
-          <div
-            className={cn(
-              'page-viewer__subheader print:hidden',
-              showRightPane &&
-                (tocCollapsed
-                  ? 'page-viewer__subheader--toc-reserved-collapsed'
-                  : 'page-viewer__subheader--toc-reserved'),
-            )}
-          >
-            <div className="page-viewer__subheader-inner">
-              <div className="page-viewer__subheader-main">
-                <div className="page-viewer__subheader-copy">
-                  <Breadcrumbs />
-                  {showUpdated && (
-                    <div className="page-viewer__metadata">
-                      <span className="page-viewer__metadata-item">
-                        {editorName
-                          ? t('section.updatedByLabel', {
-                              editor: editorName,
-                              time: updatedRelative,
-                            })
-                          : t('section.updatedLabel', {
-                              time: updatedRelative,
-                            })}
-                      </span>
-                    </div>
-                  )}
-                </div>
+  return (
+    <div className="page-viewer page-viewer--reading">
+      {page && !error && (
+        <>
+          <section className="page-viewer__article-band">
+            <header className="page-viewer__article-header">
+              <div className="page-viewer__title-row">
+                <h1 className="page-viewer__title">{page.title}</h1>
                 {isLoggedIn && (
                   <FavoriteToggleButton
                     pageId={page.id}
-                    size={16}
+                    size={20}
                     className="page-viewer__favorite-toggle"
                   />
                 )}
               </div>
+              {showUpdated && (
+                <div className="page-viewer__metadata">
+                  <span className="page-viewer__metadata-item">
+                    {editorName
+                      ? t('section.updatedByLabel', {
+                          editor: editorName,
+                          time: updatedRelative,
+                        })
+                      : t('section.updatedLabel', { time: updatedRelative })}
+                  </span>
+                </div>
+              )}
+              <Breadcrumbs />
+              <PageMetadata page={page} />
               {showTocButton && (
-                <div className="page-viewer__toc-button">
+                <div className="page-viewer__mobile-toc print:hidden">
                   <TocDropdownButton
                     entries={tocEntries}
                     clickable
@@ -241,47 +226,26 @@ export default function PageViewer() {
                   />
                 </div>
               )}
+            </header>
+            <hr className="page-viewer__article-divider" />
+            <div className="page-viewer__body">
+              <article className="page-viewer__content">
+                <MarkdownPreview content={page.content} path={page.path} />
+                <EmptySectionChildrenList page={page} />
+              </article>
+              <BacklinkInfo />
             </div>
-          </div>,
-          subheaderRoot,
-        )
-      : null
-
-  const tocPane =
-    showRightPane && page && !error && tocPaneRoot
-      ? createPortal(
-          <TocSidePanel
-            entries={showTocButton ? tocEntries : []}
-            activeId={tocActiveId}
-            downloads={attachments}
-          />,
-          tocPaneRoot,
-        )
-      : null
-
-  return (
-    <>
-      {subheader}
-      {tocPane}
-      {page && !error && (
-        <div className="page-viewer__metadata-bar hidden sm:block print:hidden">
-          <div className="page-viewer__metadata-bar-inner">
-            <PageMetadata page={page} />
-          </div>
-        </div>
+          </section>
+          <aside className="page-viewer__toc-band print:hidden">
+            <TocSidePanel
+              entries={tocEntries}
+              activeId={tocActiveId}
+              downloads={attachments}
+            />
+          </aside>
+        </>
       )}
-      <div className="page-viewer">
-        {page && !error && (
-          <div className="page-viewer__body">
-            <article className="page-viewer__content">
-              <MarkdownPreview content={page.content} path={page.path} />
-              <EmptySectionChildrenList page={page} />
-            </article>
-            <BacklinkInfo />
-          </div>
-        )}
-        {renderError()}
-      </div>
-    </>
+      {renderError()}
+    </div>
   )
 }

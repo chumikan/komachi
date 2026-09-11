@@ -56,7 +56,9 @@ export function TocSidePanel({
           )}
           aria-hidden={collapsed}
         >
-          {entries.length > 0 ? t('toc.onThisPage') : t('toc.downloads')}
+          {entries.length > 0 || downloads.length === 0
+            ? t('toc.onThisPage')
+            : t('toc.downloads')}
         </p>
         <button
           type="button"

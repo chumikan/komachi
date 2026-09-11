@@ -1603,7 +1603,7 @@ Trailing content`;
     const viewPage = new ViewPage(page);
     await viewPage.goto(`/${slug}#target-section`);
 
-    const stickyToc = page.locator('.page-viewer__subheader');
+    const stickyToc = page.locator('.app-layout__header');
     const targetHeading = page.locator('article h2').getByText('Target Section');
 
     await stickyToc.waitFor({ state: 'visible' });
@@ -1695,7 +1695,7 @@ Content.`;
     const viewPage = new ViewPage(page);
     await viewPage.goto(`/${slug}`);
 
-    const tocPane = page.locator('.app-layout__toc-pane');
+    const tocPane = page.locator('.page-viewer__toc-band');
     const tocList = page.getByTestId('toc-side-panel-list');
     await expect(tocList).toBeVisible();
 
@@ -1728,162 +1728,91 @@ Content.`;
     await expect(lastEntry).toBeInViewport();
   });
 
-  test('subheader stays in lockstep with toc pane width when leaving a toc page', async ({
+  test('reading bands keep a 3 to 1 layout with sticky toc and working metadata', async ({
     page,
   }) => {
-    // The horizontal shift only becomes reliably measurable once available
-    // width clears sidebar + max-w-5xl + the 16rem toc-reserved padding —
-    // the default viewport sits right at the min-width: 1280px media query
-    // boundary and isn't wide enough for the mx-auto slack to show it.
-    await page.setViewportSize({ width: 1920, height: 1080 });
-
-    const timestamp = Date.now();
-    const tocSlug = `toc-exit-desync-${timestamp}`;
-    const tocTitle = `Toc Exit Desync ${timestamp}`;
-    const plainSlug = `toc-exit-desync-plain-${timestamp}`;
-    const plainTitle = `Toc Exit Desync Plain ${timestamp}`;
-
-    await createPageWithContent(page, {
-      title: tocTitle,
-      slug: tocSlug,
-      content: '# Intro\n\n## Section One\n\n## Section Two\n\n## Section Three\n\n## Section Four',
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const slug = `reading-bands-${Date.now()}`;
+    const title = 'Reading Bands';
+    await createPageWithMetadata(page, {
+      title,
+      slug,
+      tags: ['reading-tag'],
+      content:
+        '# Intro\n\n' +
+        Array.from(
+          { length: 12 },
+          (_, i) => `## Section ${i + 1}\n\n${'Readable paragraph. '.repeat(70)}`,
+        ).join('\n\n'),
     });
-    await createPageWithContent(page, {
-      title: plainTitle,
-      slug: plainSlug,
-      content: '# Only Heading\n\nNo other sections.',
+    const view = new ViewPage(page);
+    await view.goto(slug);
+    const left = page.locator('.page-viewer__article-band');
+    const right = page.locator('.page-viewer__toc-band');
+    await expect(left.locator('.page-viewer__title')).toHaveText(title);
+    await expect(left.locator('hr')).toHaveCount(1);
+    await expect(page.locator('.page-viewer__subheader')).toHaveCount(0);
+    await expect(page.locator('#app-subheader-root')).toBeEmpty();
+    await expect(page.locator('.app-layout__header')).toBeVisible();
+    await expect(right).toBeVisible();
+    const a = (await left.boundingBox())!;
+    const b = (await right.boundingBox())!;
+    expect(a.width / b.width).toBeCloseTo(3, 1);
+    expect(b.x - a.x - a.width).toBeGreaterThan(8);
+    expect(Math.abs(a.y - b.y)).toBeLessThan(2);
+    await expect(left.locator('.page-metadata__tag-chip')).toHaveText('reading-tag');
+    await page.screenshot({ path: '/tmp/reading-desktop.png' });
+    await left.locator('.page-metadata__tag-chip').click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('tags')).toBe('reading-tag');
+    await expect(page.getByTestId('search-input')).toBeVisible();
+    const favorite = left.locator('.page-viewer__favorite-toggle');
+    await favorite.click();
+    await expect(favorite).toHaveAttribute('aria-pressed', 'true');
+    await favorite.click();
+    await expect(favorite).toHaveAttribute('aria-pressed', 'false');
+    await page.locator('#scroll-container').evaluate((el) => {
+      el.scrollTop = 500;
     });
-
-    const viewPage = new ViewPage(page);
-    const treeView = new TreeView(page);
-
-    await viewPage.goto(`/${tocSlug}`);
-    const subheader = page.locator('.page-viewer__subheader');
-    await subheader.waitFor({ state: 'visible' });
-    await expect(subheader).toHaveClass(/toc-reserved/);
-    // Let any mount transition finish so the click below is the only
-    // transition in flight during the sampling window.
-    await page.waitForTimeout(300);
-
-    // Generous relative to the 200ms transition: navigation itself (click,
-    // route change, new page fetch) can eat into the window before the
-    // transition even starts, especially under CI/system load — the window
-    // just needs to comfortably outlast whenever that happens, not start
-    // exactly on time.
-    const windowMs = 2000;
-
-    // Sampled inside the page via requestAnimationFrame rather than
-    // Node-side boundingBox() polling — a round trip per sample would
-    // introduce jitter comparable to the 200ms transition under test.
-    // Elements are re-queried on every frame (not captured once up front):
-    // React may swap the breadcrumb/heading DOM nodes on navigation, and
-    // measuring stale, detached nodes would silently report {0,0,0,0} for
-    // both — a false pass.
-    await page.evaluate((duration) => {
-      const samples: { t: number; dx: number }[] = [];
-      const start = performance.now();
-      (window as unknown as { __desyncSamples: typeof samples }).__desyncSamples = samples;
-      function tick() {
-        const now = performance.now();
-        const breadcrumb = document.querySelector('.breadcrumbs-nav');
-        const heading = document.querySelector('article h1');
-        if (breadcrumb && heading && breadcrumb.isConnected && heading.isConnected) {
-          const b = breadcrumb.getBoundingClientRect();
-          const h = heading.getBoundingClientRect();
-          samples.push({ t: now - start, dx: Math.abs(b.x - h.x) });
-        }
-        if (now - start < duration) requestAnimationFrame(tick);
-      }
-      requestAnimationFrame(tick);
-    }, windowMs);
-
-    await treeView.clickPageByTitle(plainTitle);
-
-    await page.waitForTimeout(windowMs + 100);
-    const samples = await page.evaluate(
-      () =>
-        (window as unknown as { __desyncSamples?: { t: number; dx: number }[] }).__desyncSamples ??
-        [],
-    );
-
-    // Sanity check: if the sampler didn't actually run across several real
-    // frames, the assertions below would vacuously pass.
-    expect(samples.length).toBeGreaterThan(5);
-    for (const sample of samples) {
-      expect(
-        sample.dx,
-        `breadcrumb/title misaligned by ${sample.dx}px at t=${sample.t}ms`,
-      ).toBeLessThan(10);
-    }
+    await expect.poll(async () => (await right.boundingBox())!.y).toBeCloseTo(b.y, 0);
+    await page.getByTestId('toc-entry-section-5').click();
+    await expect
+      .poll(async () => {
+        const h = (await page.locator('article #section-5').boundingBox())!;
+        const header = (await page.locator('.app-layout__header').boundingBox())!;
+        return h.y >= header.y + header.height && h.y < 800;
+      })
+      .toBe(true);
+    await view.clickEditPageButton();
+    await expect(page.locator('.cm-editor')).toBeVisible();
+    await expect(left).toHaveCount(0);
+    await expect(right).toHaveCount(0);
+    await new EditPage(page).closeEditor();
+    await view.openCurrentPageHistory();
+    await expect(page.getByTestId('page-history-page-content')).toBeVisible();
+    await expect(left).toHaveCount(0);
+    await expect(right).toHaveCount(0);
   });
 
-  test('subheader stays in lockstep with toc pane width when entering a toc page', async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1920, height: 1080 });
-
-    const timestamp = Date.now();
-    const tocSlug = `toc-enter-sync-${timestamp}`;
-    const tocTitle = `Toc Enter Sync ${timestamp}`;
-    const plainSlug = `toc-enter-sync-plain-${timestamp}`;
-    const plainTitle = `Toc Enter Sync Plain ${timestamp}`;
-
+  test('reading bands preserve narrow screen toc dropdown', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const slug = `reading-mobile-${Date.now()}`;
     await createPageWithContent(page, {
-      title: plainTitle,
-      slug: plainSlug,
-      content: '# Only Heading\n\nNo other sections.',
+      title: 'Mobile Reading',
+      slug,
+      content:
+        '# Intro\n\n## Section One\n\nText\n\n## Section Two\n\nMore text\n\n## Section Three',
     });
-    await createPageWithContent(page, {
-      title: tocTitle,
-      slug: tocSlug,
-      content: '# Intro\n\n## Section One\n\n## Section Two\n\n## Section Three\n\n## Section Four',
-    });
-
-    const viewPage = new ViewPage(page);
-    const treeView = new TreeView(page);
-
-    await viewPage.goto(`/${plainSlug}`);
-    const subheader = page.locator('.page-viewer__subheader');
-    await subheader.waitFor({ state: 'visible' });
-    await expect(subheader).not.toHaveClass(/toc-reserved/);
-    await page.waitForTimeout(300);
-
-    const windowMs = 2000;
-
-    await page.evaluate((duration) => {
-      const samples: { t: number; dx: number }[] = [];
-      const start = performance.now();
-      (window as unknown as { __desyncSamples: typeof samples }).__desyncSamples = samples;
-      function tick() {
-        const now = performance.now();
-        const breadcrumb = document.querySelector('.breadcrumbs-nav');
-        const heading = document.querySelector('article h1');
-        if (breadcrumb && heading && breadcrumb.isConnected && heading.isConnected) {
-          const b = breadcrumb.getBoundingClientRect();
-          const h = heading.getBoundingClientRect();
-          samples.push({ t: now - start, dx: Math.abs(b.x - h.x) });
-        }
-        if (now - start < duration) requestAnimationFrame(tick);
-      }
-      requestAnimationFrame(tick);
-    }, windowMs);
-
-    await treeView.clickPageByTitle(tocTitle);
-
-    await page.waitForTimeout(windowMs + 100);
-    const samples = await page.evaluate(
-      () =>
-        (window as unknown as { __desyncSamples?: { t: number; dx: number }[] }).__desyncSamples ??
-        [],
-    );
-
-    expect(samples.length).toBeGreaterThan(5);
-    for (const sample of samples) {
-      expect(
-        sample.dx,
-        `breadcrumb/title misaligned by ${sample.dx}px at t=${sample.t}ms`,
-      ).toBeLessThan(10);
-    }
+    await new ViewPage(page).goto(slug);
+    await expect(page.locator('.page-viewer__toc-band')).toBeHidden();
+    const dropdown = page.locator('.page-viewer__mobile-toc button');
+    await expect(dropdown).toBeVisible();
+    await dropdown.click();
+    await page.getByRole('menuitem', { name: 'Section Two', exact: true }).click();
+    await expect(page.locator('article #section-two')).toBeInViewport();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await page.screenshot({ path: '/tmp/reading-mobile.png' });
   });
 
   test('navigating away from page with footnote headline stays responsive', async ({ page }) => {

@@ -1668,6 +1668,117 @@
     @apply mx-auto flex w-full max-w-5xl flex-1 flex-col px-4 pt-3 pb-0 sm:px-8;
   }
 
+  /* Reading page only: two quiet vertical bands inside the existing scroll
+     container. Editor/history/settings and the global header are untouched. */
+  .page-viewer--reading {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    max-width: none;
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .page-viewer__article-band,
+  .page-viewer__toc-band {
+    @apply bg-surface border-surface-border;
+    min-width: 0;
+    border-width: 1px;
+    border-radius: 3px;
+    box-shadow: none;
+  }
+
+  .page-viewer__article-band {
+    padding: clamp(1rem, 2vw, 1.75rem);
+    min-height: calc(100dvh - 55px - 2rem);
+  }
+
+  .page-viewer__article-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .page-viewer__title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+
+  .page-viewer__title {
+    @apply text-page-text;
+    min-width: 0;
+    margin: 0;
+    font-size: 2.25rem;
+    line-height: 1.15;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+  }
+
+  .page-viewer__title-row .page-viewer__favorite-toggle {
+    flex-shrink: 0;
+  }
+
+  .page-viewer__article-divider {
+    @apply border-surface-border;
+    margin: 1rem 0;
+    border-top-width: 1px;
+  }
+
+  .page-viewer__article-band .page-viewer__content {
+    margin-top: 0;
+    min-width: 0;
+  }
+
+  .page-viewer__toc-band {
+    display: none;
+  }
+
+  @media (min-width: 1024px) {
+    .page-viewer--reading {
+      grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+    }
+
+    .page-viewer__mobile-toc {
+      display: none;
+    }
+
+    .page-viewer__toc-band {
+      display: flex;
+      position: sticky;
+      /* #scroll-container already starts below the 55px global header. */
+      top: 1rem;
+      height: calc(100dvh - 55px - 2rem);
+      padding: 1rem;
+      overflow: hidden;
+    }
+
+    .page-viewer__toc-band .page-viewer__toc-panel {
+      border: 0;
+      padding: 0;
+    }
+
+    .page-viewer__toc-band .page-viewer__toc-panel-entry {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  @media print {
+    .page-viewer--reading {
+      display: block;
+      padding: 0;
+    }
+    .page-viewer__article-band {
+      border: 0;
+      padding: 0;
+      min-height: 0;
+    }
+    .page-viewer__toc-band {
+      display: none;
+    }
+  }
+
   .page-viewer__subheader {
     @apply bg-background/92 border-surface-border border-b backdrop-blur-sm md:h-12;
   }
