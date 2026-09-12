@@ -1675,8 +1675,8 @@
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
     max-width: none;
-    gap: 1rem;
-    padding: 1rem;
+    gap: 2rem;
+    padding: 2rem 5rem;
   }
 
   .page-viewer__article-band,
@@ -1690,7 +1690,7 @@
 
   .page-viewer__article-band {
     padding: clamp(1rem, 2vw, 1.75rem);
-    min-height: calc(100dvh - 55px - 2rem);
+    min-height: calc(100dvh - 55px - 4rem);
   }
 
   .page-viewer__article-header {
@@ -1747,8 +1747,8 @@
       display: flex;
       position: sticky;
       /* #scroll-container already starts below the 55px global header. */
-      top: 1rem;
-      height: calc(100dvh - 55px - 2rem);
+      top: 2rem;
+      height: calc(100dvh - 55px - 4rem);
       padding: 1rem;
       overflow: hidden;
     }
